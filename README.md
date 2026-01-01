@@ -63,6 +63,7 @@ DiskSpaceConfig.xml
 Then edit the values as needed.
 
 📝 Example Configuration
+```xml
 <DiskSpaceServiceConfig>
   <CollectionTime>08:00</CollectionTime>
   <RunMissedCollection>true</RunMissedCollection>
@@ -81,6 +82,7 @@ Then edit the values as needed.
     <GroupMeBotId>YOUR_GROUPME_BOT_ID_HERE</GroupMeBotId>
   </Alert>
 </DiskSpaceServiceConfig>
+```
 
 🔧 Configuration Details
 CollectionTime
