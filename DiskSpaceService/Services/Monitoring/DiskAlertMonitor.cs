@@ -1,23 +1,22 @@
 using DiskSpaceService.Config;
 using DiskSpaceService.Models;
-using DiskSpaceService.Services.Logging;
 using System;
-using System.Collections.Generic;
 using System.IO;
 
 namespace DiskSpaceService.Services.Monitoring
 {
+    /// <summary>
+    /// Pure disk status provider. 
+    /// No logging, no threshold logic, no state tracking.
+    /// NotificationLoop handles all alerting and logging.
+    /// </summary>
     public class DiskAlertMonitor
     {
         private readonly DiskSpaceConfig _config;
-        private readonly RollingFileLogger _logger;
 
-        private readonly Dictionary<string, double> _lastFreeGb = new();
-
-        public DiskAlertMonitor(DiskSpaceConfig config, RollingFileLogger logger)
+        public DiskAlertMonitor(DiskSpaceConfig config)
         {
             _config = config;
-            _logger = logger;
         }
 
         public DiskStatus GetStatus(string driveLetter)
@@ -28,7 +27,6 @@ namespace DiskSpaceService.Services.Monitoring
 
                 if (!di.IsReady)
                 {
-                    _logger.Log($"[MONITOR] Drive {driveLetter} is not ready.");
                     return new DiskStatus
                     {
                         DriveName = driveLetter,
@@ -40,16 +38,6 @@ namespace DiskSpaceService.Services.Monitoring
                 double totalGb = di.TotalSize / 1024d / 1024d / 1024d;
                 double freeGb = di.AvailableFreeSpace / 1024d / 1024d / 1024d;
 
-                if (!_lastFreeGb.TryGetValue(driveLetter, out var last) ||
-                    Math.Abs(last - freeGb) >= 0.1)
-                {
-                    _logger.Log(
-                        $"[MONITOR] Drive {driveLetter}: Free {freeGb:F2} GB of {totalGb:F2} GB ({(freeGb / totalGb) * 100:F2}%)."
-                    );
-
-                    _lastFreeGb[driveLetter] = freeGb;
-                }
-
                 return new DiskStatus
                 {
                     DriveName = driveLetter,
@@ -57,10 +45,8 @@ namespace DiskSpaceService.Services.Monitoring
                     FreeSpaceGb = freeGb
                 };
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.Log($"[MONITOR] Error reading drive {driveLetter}: {ex}");
-
                 return new DiskStatus
                 {
                     DriveName = driveLetter,

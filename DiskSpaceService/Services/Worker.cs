@@ -33,7 +33,7 @@ namespace DiskSpaceService.Services
             if (_config.EnableStartupLogging)
                 _logger.Log("[STARTUP] Config loaded");
 
-            var monitor = new DiskAlertMonitor(_config, _logger);
+            var monitor = new DiskAlertMonitor(_config);
             var senders = AlertSenderFactory.BuildSenders(_config, _logger);
             var sqlReporter = new SqlReporter(_config, _logger);
 
