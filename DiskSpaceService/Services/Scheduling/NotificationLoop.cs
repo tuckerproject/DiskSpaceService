@@ -5,7 +5,6 @@ using DiskSpaceService.Services.Logging;
 using DiskSpaceService.Services.Monitoring;
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -18,6 +17,7 @@ namespace DiskSpaceService.Services.Scheduling
         private readonly DiskAlertMonitor _monitor;
         private readonly RollingFileLogger _logger;
 
+        // Tracks last known state per drive: NORMAL, ALERT, NOT_READY
         private readonly Dictionary<string, string> _lastAlertState = new();
 
         public NotificationLoop(
@@ -42,40 +42,60 @@ namespace DiskSpaceService.Services.Scheduling
                     {
                         var status = _monitor.GetStatus(driveLetter);
 
-                        bool belowThreshold = status.PercentFree < _config.ThresholdPercent;
-                        string state = belowThreshold ? "ALERT" : "NORMAL";
+                        string state;
+                        string message;
 
+                        // -----------------------------
+                        // 1. Drive NOT READY
+                        // -----------------------------
+                        if (status.TotalSpaceGb == 0)
+                        {
+                            state = "NOT_READY";
+                            message = $"ALERT: Drive {status.DriveName} is NOT READY or unavailable.";
+                        }
+                        else
+                        {
+                            // -----------------------------
+                            // 2. Drive READY — check threshold
+                            // -----------------------------
+                            bool belowThreshold = status.PercentFree < _config.ThresholdPercent;
+
+                            if (belowThreshold)
+                            {
+                                state = "ALERT";
+                                message =
+                                    $"ALERT: Drive {status.DriveName} is below threshold. " +
+                                    $"{status.FreeSpaceGb:F2} GB free ({status.PercentFree:F2}%).";
+                            }
+                            else
+                            {
+                                state = "NORMAL";
+                                message =
+                                    $"RECOVERY: Drive {status.DriveName} has recovered. " +
+                                    $"{status.FreeSpaceGb:F2} GB free ({status.PercentFree:F2}%).";
+                            }
+                        }
+
+                        // -----------------------------
+                        // 3. Compare with last state
+                        // -----------------------------
                         _lastAlertState.TryGetValue(driveLetter, out var lastState);
 
                         if (lastState != state)
                         {
-                            if (belowThreshold)
-                            {
-                                _logger.Log(
-                                    $"[ALERT] ALERT SENT: Drive {status.DriveName} below threshold ({status.PercentFree:F2}%)."
-                                );
+                            // Log transition
+                            if (state == "NOT_READY")
+                                _logger.Log($"[ALERT] Drive {status.DriveName} NOT READY.");
+                            else if (state == "ALERT")
+                                _logger.Log($"[ALERT] Drive {status.DriveName} LOW SPACE ({status.PercentFree:F2}%).");
+                            else if (state == "NORMAL")
+                                _logger.Log($"[ALERT] Drive {status.DriveName} RECOVERED ({status.PercentFree:F2}%).");
 
-                                string message =
-                                    $"ALERT: Drive {status.DriveName} is below threshold. " +
-                                    $"{status.FreeSpaceGb:F2} GB free ({status.PercentFree:F2}%).";
+                            // Send alert
+                            foreach (var sender in _senders)
+                                await sender.SendAlertAsync(message);
 
-                                foreach (var sender in _senders)
-                                    await sender.SendAlertAsync(message);
-                            }
-                            else
-                            {
-                                _logger.Log(
-                                    $"[ALERT] NORMAL SENT: Drive {status.DriveName} recovered ({status.PercentFree:F2}%)."
-                                );
-
-                                string message =
-                                    $"RECOVERY: Drive {status.DriveName} has recovered. " +
-                                    $"{status.FreeSpaceGb:F2} GB free ({status.PercentFree:F2}%).";
-
-                                foreach (var sender in _senders)
-                                    await sender.SendAlertAsync(message);
-                            }
-
+                            // Update state
                             _lastAlertState[driveLetter] = state;
                         }
                     }

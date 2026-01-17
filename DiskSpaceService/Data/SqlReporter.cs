@@ -32,6 +32,15 @@ namespace DiskSpaceService.Services.Scheduling
                 {
                     var status = GetDiskStatus(driveLetter);
 
+                    // -----------------------------------------
+                    // Skip SQL insert if drive is NOT READY
+                    // -----------------------------------------
+                    if (status.TotalSpaceGb == 0)
+                    {
+                        _logger.Log($"[SQL] Skipping insert for drive {status.DriveName}: drive not ready.");
+                        continue;
+                    }
+
                     string sql = @"
                         INSERT INTO DiskSpaceLog
                         (MachineName, DriveLetter, TotalSpaceGB, UsedSpaceGB, FreeSpaceGB, PercentFree, CollectionTimeUtc)
