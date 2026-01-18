@@ -1,100 +1,136 @@
 # DiskSpaceService
 
-📄 README.md — Disk Space Monitoring Service
+A lightweight, self‑hosted Windows Service for monitoring disk space, logging metrics to SQL, and sending real‑time alerts through GroupMe or SMTP. Built on .NET 8.0 and designed for reliability, clarity, and minimal configuration.
 
 🧭 Overview
-The Disk Space Monitoring Service is a lightweight Windows Service designed to:
-- Collect disk space metrics from one or more drives
-- Store those metrics in a SQL database
-- Send real‑time alerts when disk space falls below a configurable threshold
-- Notify when disk space returns to normal
-- Maintain rolling log files for auditability
-- Run reliably with minimal configuration
-This project provides a simple, self‑hosted monitoring solution without relying on cloud services or heavy enterprise tools.
+DiskSpaceService continuously monitors one or more drives and provides:
+• 	Real‑time alerts when disk space falls below a configurable threshold
+• 	Recovery notifications when space returns to normal
+• 	Daily SQL logging of disk metrics
+• 	Rolling log files for auditability
+• 	A clean, state‑driven architecture that avoids duplicate alerts
+• 	Support for GroupMe and SMTP alerting
+• 	A simple XML configuration file
+This service is ideal for home labs, small servers, or any environment where lightweight, dependable monitoring is needed.
 
 🚀 Features
-✔ Daily Disk Space Collection
-Runs once per day and logs:
-- Total size
-- Used space
-- Free space
-- Percent free
-- Machine name
-- Timestamp
 ✔ Continuous Alert Monitoring
-Checks disk space every minute and:
-- Sends a low disk space alert when below threshold
-- Sends a normal alert when recovered
-- Avoids duplicate alerts using a persistent state file
-✔ GroupMe Alert Integration
-Alerts are sent to a GroupMe bot for:
-- Instant notifications
-- Mobile visibility
-- Group alerts
+Runs every minute and uses a state machine to detect:
+• 	ALERT — Drive below threshold
+• 	NORMAL — Drive healthy
+• 	NOT_READY — Drive unavailable or unmounted
+Alerts are only sent when the state changes.
+✔ Machine‑Name‑Prefixed Alerts
+All alerts include the machine name, making multi‑machine monitoring easy.
+✔ Network‑Ready Alerting
+Alerts are delayed until DNS resolution succeeds, preventing startup failures.
+✔ State File Persistence
+Alert state is stored in:
+C:\ProgramData\DiskSpaceService\alert_state.json
+This prevents reboot spam and ensures correct behavior across restarts.
+✔ Daily SQL Reporting
+Once per day, the service logs:
+• 	Total space
+• 	Used space
+• 	Free space
+• 	Percent free
+• 	Drive letter
+• 	Machine name
+• 	Timestamp
+Missed runs (e.g., due to reboot) are automatically recovered.
 ✔ Rolling Log Files
 Logs are stored in:
 C:\ProgramData\DiskSpaceService\Logs
-
-The logger:
-- Rotates at 1 MB
-- Keeps the last 3 logs
-- Ensures clean audit history
-✔ XML‑Based Configuration
-All settings are stored in a simple XML file that users can edit without recompiling.
+• 	Rotates at 1 MB
+• 	Keeps the last 3 logs
+• 	Ensures clean audit history
+✔ GroupMe & SMTP Alerts
+Choose one or both:
+• 	GroupMe bot messages
+• 	SMTP email alerts
 
 📦 Installation
-1. Clone the repository
-git clone https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git
-2. Build the project
+1. 	Clone the repository
+git clone https://github.com/tuckerproject/DiskSpaceService
+2. 	Build the project
 Open the solution in Visual Studio and build in Release mode.
-3. Install as a Windows Service
+3. 	Install as a Windows Service
 Run PowerShell as Administrator:
 sc create DiskSpaceService binPath= "C:\Path\To\Your\Executable.exe"
 sc start DiskSpaceService
 
 ⚙ Configuration
-The configuration file is:
-DiskSpaceConfig.xml
+The configuration file is: DiskSpaceConfig.xml
 This file is not included in the repository for security reasons.
-Instead, the repo includes:
-DiskSpaceConfig.example.xml
-Copy it and rename:
-DiskSpaceConfig.xml
+Instead, the repo includes: DiskSpaceConfig.example.xml
+Copy it and rename: DiskSpaceConfig.xml
 Then edit the values as needed.
 
-📝 Example Configuration
-<DiskSpaceServiceConfig>
-  <CollectionTime>08:00</CollectionTime>
+📝 Example Configuration (v2.0)
+```xml
+<DiskSpaceConfig>
+
+  <!-- SQL Reporting -->
+  <EnableSqlReporting>true</EnableSqlReporting>
   <RunMissedCollection>true</RunMissedCollection>
+  <RunOnlyOncePerDay>true</RunOnlyOncePerDay>
+  <CollectionTime>08:00</CollectionTime>
+
+  <!-- Disk Monitoring -->
+  <ThresholdPercent>10</ThresholdPercent>
 
   <Drives>
     <Drive>C</Drive>
     <Drive>D</Drive>
   </Drives>
 
+  <!-- Database -->
   <Database>
-    <ConnectionString>YOUR_CONNECTION_STRING_HERE</ConnectionString>
+    <ConnectionString>
+      Server=.;Database=DiskReports;Trusted_Connection=True;TrustServerCertificate=True;
+    </ConnectionString>
   </Database>
 
-  <Alert>
-    <ThresholdPercent>10</ThresholdPercent>
-    <GroupMeBotId>YOUR_GROUPME_BOT_ID_HERE</GroupMeBotId>
-  </Alert>
-</DiskSpaceServiceConfig>
+  <!-- GroupMe Alerts -->
+  <GroupMe>
+    <Enabled>true</Enabled>
+    <BotId>YOUR_BOT_ID</BotId>
+  </GroupMe>
+
+  <!-- SMTP Alerts -->
+  <Smtp>
+    <Enabled>false</Enabled>
+    <Host>smtp.example.com</Host>
+    <Port>587</Port>
+    <UseSsl>true</UseSsl>
+    <Username>youruser</Username>
+    <Password>yourpassword</Password>
+    <FromAddress>alerts@example.com</FromAddress>
+    <ToAddress>you@example.com</ToAddress>
+  </Smtp>
+
+</DiskSpaceConfig>
+```
 
 🔧 Configuration Details
-CollectionTime
-Daily run time in 24‑hour format.
-RunMissedCollection
-If true, the service runs immediately after boot if the scheduled time was missed.
-Drives
-List of drive letters to monitor.
-Database.ConnectionString
-Your SQL Server connection string.
-Alert.ThresholdPercent
-Triggers alerts when free space drops below this percentage.
-Alert.GroupMeBotId
-Your GroupMe bot ID (keep this secret).
+SQL Reporting
+• 	EnableSqlReporting — Enables daily SQL logging
+• 	RunMissedCollection — Runs immediately after boot if the scheduled time was missed
+• 	RunOnlyOncePerDay — Ensures only one run per day
+• 	CollectionTime — Daily run time (24‑hour format)
+Disk Monitoring
+• 	ThresholdPercent — Alerts when free space drops below this percentage
+• 	Drives — List of drive letters to monitor
+Database
+• 	ConnectionString — SQL Server connection string
+GroupMe Alerts
+• 	Enabled — Enables GroupMe alerts
+• 	BotId — Your GroupMe bot ID
+SMTP Alerts
+• 	Enabled — Enables SMTP alerts
+• 	Host / Port / UseSsl — SMTP server settings
+• 	Username / Password — SMTP credentials
+• 	FromAddress / ToAddress — Email sender and recipient
 
 📊 Database Schema
 CREATE TABLE DiskSpaceMetrics (
@@ -108,32 +144,33 @@ CREATE TABLE DiskSpaceMetrics (
     TimestampUtc DATETIME
 );
 
-🔔 Alerts
-Low Disk Space Alert
-Triggered when:
-PercentFree < ThresholdPercent
+🔔 Alerts (v2.0)
+Alert States
+• 	NORMAL — Drive is healthy
+• 	ALERT — Drive below threshold
+• 	NOT_READY — Drive unavailable or unmounted
+Alert Behavior
+• 	Alerts are sent only when the state changes
+• 	Recovery alerts are sent when returning to NORMAL
+• 	All alerts include the machine name
+• 	Alerts are delayed until the network is ready
+• 	State is persisted to avoid duplicate alerts
+State File
+C:\ProgramData\DiskSpaceService\alert_state.json
 
-Disk Space Normal Alert
-Triggered when:
-PercentFree >= ThresholdPercent
-
-Alert State Persistence
-Stored in:
-AlertState.json
-
-This prevents duplicate alerts and ensures correct behavior across restarts.
-
-🧱 Architecture Overview
-- Worker Service — main loop
-- DailyRunScheduler — daily SQL logging
-- DiskSpaceAlertMonitor — continuous alerting
-- GroupMeAlertService — sends GroupMe messages
-- RollingFileLogger — log rotation
-- AlertStateStore — persists alert state
-- DiskSpaceCollector — reads disk metrics
+🧱 Architecture Overview (v2.0)
+• 	Worker Service — Hosts background loops
+• 	NotificationLoop — Continuous alert monitoring with state machine
+• 	SqlReporter — Daily SQL logging with missed‑run recovery
+• 	DiskAlertMonitor — Reads disk metrics and drive readiness
+• 	AlertSenderFactory — Creates enabled alert senders
+• 	GroupMeAlertSender — Sends GroupMe messages
+• 	SmtpAlertSender — Sends email alerts
+• 	RollingFileLogger — Log rotation and audit history
+• 	State File — Persists last alert state
 
 🤝 Contributing
-Contributions are welcome!
+Contributions are welcome.
 Feel free to fork the project, create feature branches, and submit pull requests.
 
 📜 License

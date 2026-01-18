@@ -6,9 +6,6 @@
 	<RunOnlyOncePerDay>true</RunOnlyOncePerDay>
 	<CollectionTime>08:00</CollectionTime>
 
-	<!-- Notifications -->
-	<EnableNotifications>true</EnableNotifications>
-
 	<!-- Disk Monitoring -->
 	<ThresholdPercent>10</ThresholdPercent>
 
@@ -41,7 +38,5 @@
 		<FromAddress>alerts@example.com</FromAddress>
 		<ToAddress>you@example.com</ToAddress>
 	</Smtp>
-
-	<EnableStartupLogging>false</EnableStartupLogging>
 
 </DiskSpaceConfig>
