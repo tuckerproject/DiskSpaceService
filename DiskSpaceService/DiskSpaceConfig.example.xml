@@ -1,27 +1,42 @@
-<DiskSpaceServiceConfig>
-  <!-- Daily scheduled run time (24-hour format) -->
-  <CollectionTime>08:00</CollectionTime>
+<DiskSpaceConfig>
 
-  <!-- If true, the service will run immediately after wake/boot if it missed the scheduled time -->
-  <RunMissedCollection>true</RunMissedCollection>
+	<!-- SQL Reporting -->
+	<EnableSqlReporting>true</EnableSqlReporting>
+	<RunMissedCollection>true</RunMissedCollection>
+	<RunOnlyOncePerDay>true</RunOnlyOncePerDay>
+	<CollectionTime>08:00</CollectionTime>
 
-  <!-- Drives to monitor -->
-  <Drives>
-    <Drive>C</Drive>
-    <Drive>D</Drive>
-  </Drives>
+	<!-- Disk Monitoring -->
+	<ThresholdPercent>10</ThresholdPercent>
 
-  <!-- Database connection -->
-  <Database>
-    <ConnectionString>CONNECTION_STRING_HERE</ConnectionString>
-  </Database>
+	<Drives>
+		<Drive>C</Drive>
+		<Drive>D</Drive>
+	</Drives>
 
-  <!-- Alert settings -->
-  <Alert>
-    <!-- Percent free threshold (e.g., 10 means alert if < 10% free) -->
-    <ThresholdPercent>10</ThresholdPercent>
+	<!-- Database -->
+	<Database>
+		<ConnectionString>
+			Server=.;Database=DiskReports;Trusted_Connection=True;TrustServerCertificate=True;
+		</ConnectionString>
+	</Database>
 
-    <!-- Your GroupMe bot ID -->
-    <GroupMeBotId>GROUPME_BOT_ID_HERE</GroupMeBotId>
-  </Alert>
-</DiskSpaceServiceConfig>
+	<!-- GroupMe -->
+	<GroupMe>
+		<EnableGroupMe>true</EnableGroupMe>
+		<BotId>YOUR_BOT_ID</BotId>
+	</GroupMe>
+
+	<!-- SMTP -->
+	<Smtp>
+		<EnableSmtp>false</EnableSmtp>
+		<Host>smtp.example.com</Host>
+		<Port>587</Port>
+		<UseSsl>true</UseSsl>
+		<Username>youruser</Username>
+		<Password>yourpassword</Password>
+		<FromAddress>alerts@example.com</FromAddress>
+		<ToAddress>you@example.com</ToAddress>
+	</Smtp>
+
+</DiskSpaceConfig>

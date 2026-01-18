@@ -1,67 +1,62 @@
 ﻿using System;
 using System.IO;
-using System.Text;
 
 namespace DiskSpaceService.Services.Logging
 {
     public class RollingFileLogger
     {
-        private readonly string _logDirectory;
-        private readonly string _baseFileName;
-        private readonly long _maxFileSizeBytes = 1 * 1024 * 1024; // 1 MB
-        private readonly int _maxFiles = 3;
+        private readonly string _logFilePath;
         private readonly object _lock = new();
 
-        public RollingFileLogger(string logDirectory, string baseFileName = "DiskSpaceService")
-        {
-            _logDirectory = logDirectory;
-            _baseFileName = baseFileName;
+        private const long MaxSizeBytes = 1_000_000; // 1 MB
+        private const int MaxFiles = 3;
 
-            Directory.CreateDirectory(_logDirectory);
+        public RollingFileLogger(string logFilePath)
+        {
+            _logFilePath = logFilePath;
+
+            string? dir = Path.GetDirectoryName(_logFilePath);
+            if (!string.IsNullOrWhiteSpace(dir))
+                Directory.CreateDirectory(dir);
         }
 
         public void Log(string message)
         {
             lock (_lock)
             {
-                string filePath = GetCurrentLogFilePath();
-                string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-                string line = $"{timestamp}  {message}{Environment.NewLine}";
+                string line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}  {message}";
+                File.AppendAllText(_logFilePath, line + Environment.NewLine);
 
-                File.AppendAllText(filePath, line, Encoding.UTF8);
-
-                RollIfNeeded(filePath);
+                RollIfNeeded();
             }
         }
 
-        private string GetCurrentLogFilePath()
+        private void RollIfNeeded()
         {
-            return Path.Combine(_logDirectory, $"{_baseFileName}.log");
-        }
-
-        private void RollIfNeeded(string filePath)
-        {
-            FileInfo fi = new(filePath);
-            if (fi.Length <= _maxFileSizeBytes)
+            FileInfo fi = new FileInfo(_logFilePath);
+            if (!fi.Exists || fi.Length < MaxSizeBytes)
                 return;
 
-            // Delete oldest
-            string oldest = $"{filePath}.3";
+            // Delete the oldest file (service.log.3)
+            string oldest = _logFilePath + ".3";
             if (File.Exists(oldest))
                 File.Delete(oldest);
 
             // Shift .2 → .3
-            string two = $"{filePath}.2";
+            string two = _logFilePath + ".2";
             if (File.Exists(two))
-                File.Move(two, $"{filePath}.3");
+                File.Move(two, oldest);
 
             // Shift .1 → .2
-            string one = $"{filePath}.1";
+            string one = _logFilePath + ".1";
             if (File.Exists(one))
-                File.Move(one, $"{filePath}.2");
+                File.Move(one, two);
 
             // Shift current → .1
-            File.Move(filePath, $"{filePath}.1");
+            File.Move(_logFilePath, one, true);
+
+            // Create a new empty service.log
+            File.WriteAllText(_logFilePath, string.Empty);
         }
     }
 }
