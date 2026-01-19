@@ -98,22 +98,35 @@ namespace DiskSpaceService.Services.Scheduling
                         if (lastState != state)
                         {
                             // ----------------------------------------------------
-                            // 4. Only send alert if network is ready
+                            // NEW: Skip network checks entirely if no senders
                             // ----------------------------------------------------
-                            if (NetworkReady())
+                            if (_senders.Count == 0)
                             {
-                                foreach (var sender in _senders)
-                                    await sender.SendAlertAsync(message);
-
-                                _logger.Log($"[ALERT] State change for {driveLetter}: {lastState} → {state}");
-
+                                _logger.Log("[ALERT FACTORY] No alert senders enabled in config.");
                                 _lastAlertState[driveLetter] = state;
                                 SaveState();
+                                continue;
                             }
-                            else
+
+                            // ----------------------------------------------------
+                            // NEW: Only check GroupMe DNS if GroupMe sender exists
+                            // ----------------------------------------------------
+                            if (GroupMeEnabled() && !NetworkReady())
                             {
                                 _logger.Log("[ALERT] Network not ready — delaying alert send.");
+                                continue;
                             }
+
+                            // ----------------------------------------------------
+                            // 4. Send alerts
+                            // ----------------------------------------------------
+                            foreach (var sender in _senders)
+                                await sender.SendAlertAsync(message);
+
+                            _logger.Log($"[ALERT] State change for {driveLetter}: {lastState} → {state}");
+
+                            _lastAlertState[driveLetter] = state;
+                            SaveState();
                         }
                     }
                 }
@@ -124,6 +137,19 @@ namespace DiskSpaceService.Services.Scheduling
 
                 await Task.Delay(TimeSpan.FromMinutes(1), token);
             }
+        }
+
+        // ----------------------------------------------------
+        // NEW: Detect if GroupMe sender is enabled
+        // ----------------------------------------------------
+        private bool GroupMeEnabled()
+        {
+            foreach (var sender in _senders)
+            {
+                if (sender.GetType().Name.Contains("GroupMe", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
         }
 
         // ----------------------------------------------------

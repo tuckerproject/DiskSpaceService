@@ -205,7 +205,7 @@ Then edit the values as needed.
 ## 📊 Database Schema
 
 ```sql
-CREATE TABLE DiskSpaceMetrics (
+CREATE TABLE DiskSpaceLog (
     Id INT IDENTITY PRIMARY KEY,
     MachineName NVARCHAR(100),
     DriveLetter NVARCHAR(10),
@@ -213,7 +213,7 @@ CREATE TABLE DiskSpaceMetrics (
     UsedSpaceGB DECIMAL(10,2),
     FreeSpaceGB DECIMAL(10,2),
     PercentFree DECIMAL(5,2),
-    TimestampUtc DATETIME
+    CollectionTimeUtc DATETIME
 );
 ```
 
