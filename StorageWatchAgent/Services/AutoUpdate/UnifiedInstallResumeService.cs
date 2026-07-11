@@ -2,6 +2,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using StorageWatch.Services.AutoUpdate;
 using StorageWatchAgent.Services.AutoUpdate.Models;
+using System.Diagnostics;
 
 namespace StorageWatchAgent.Services.AutoUpdate;
 
@@ -13,6 +14,8 @@ namespace StorageWatchAgent.Services.AutoUpdate;
 /// </summary>
 public class UnifiedInstallResumeService : IHostedService
 {
+    private static readonly TimeSpan HandoffInProgressGrace = TimeSpan.FromSeconds(30);
+
     private readonly IUnifiedInstallCheckpointStore _checkpointStore;
     private readonly IUnifiedInstallCheckpointValidator _checkpointValidator;
     private readonly IUnifiedInstallOrchestrator _orchestrator;
@@ -90,11 +93,28 @@ public class UnifiedInstallResumeService : IHostedService
                                       ?? checkpoint.HandoffStartedAtUtc
                                       ?? checkpoint.LastUpdatedAtUtc;
                 var markerAge = DateTimeOffset.UtcNow - markerAgeSource;
+                var updaterProcessRunning = checkpoint.UpdaterProcessId.HasValue
+                                            && IsProcessRunning(checkpoint.UpdaterProcessId.Value);
+                var handoffIsInProgress = checkpoint.HandoffState is AgentHandoffState.Started or AgentHandoffState.ExitRequested;
+                var handoffIsFresh = markerAge <= HandoffInProgressGrace;
+
+                if (handoffIsInProgress && (updaterProcessRunning || handoffIsFresh))
+                {
+                    _logger.LogInformation(
+                        "[AUTOUPDATE] Checkpoint {OrchestrationId} has in-progress Agent handoff markers (State={State}, AgeSeconds={AgeSeconds:F1}, UpdaterRunning={UpdaterRunning}); preserving checkpoint for updater completion.",
+                        checkpoint.OrchestrationId,
+                        checkpoint.HandoffState,
+                        markerAge.TotalSeconds,
+                        updaterProcessRunning);
+                    return;
+                }
+
                 _logger.LogWarning(
-                    "[AUTOUPDATE] Checkpoint {OrchestrationId} has incomplete Agent handoff markers (State={State}, Age={AgeMinutes:F1}m) without handoff-complete marker; treating as failed handoff and clearing checkpoint.",
+                    "[AUTOUPDATE] Checkpoint {OrchestrationId} has incomplete Agent handoff markers (State={State}, AgeMinutes={AgeMinutes:F1}m, UpdaterRunning={UpdaterRunning}) without handoff-complete marker; treating as failed/stale handoff and clearing checkpoint.",
                     checkpoint.OrchestrationId,
                     checkpoint.HandoffState,
-                    markerAge.TotalMinutes);
+                    markerAge.TotalMinutes,
+                    updaterProcessRunning);
                 await DeleteCheckpointSafelyAsync(cancellationToken, "incomplete or stale agent handoff");
                 return;
             }
@@ -174,6 +194,19 @@ public class UnifiedInstallResumeService : IHostedService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[AUTOUPDATE] Failed to delete install-plan.json checkpoint ({Reason}).", reason);
+        }
+    }
+
+    private static bool IsProcessRunning(int processId)
+    {
+        try
+        {
+            var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch
+        {
+            return false;
         }
     }
 }

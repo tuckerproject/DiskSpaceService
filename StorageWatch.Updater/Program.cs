@@ -293,20 +293,6 @@ try
         logger.Log("[STEP] File replacement succeeded for Agent.");
         Console.WriteLine("File replacement succeeded.");
 
-        logger.Log($"[STEP] Agent start begins for service: {serviceName}");
-        Console.WriteLine("Agent start begins.");
-        if (!agentServiceHelper.TryStartAgentService(serviceName))
-        {
-            logger.Log("[ERROR] Agent start failed after file replacement.");
-            skippedCount++;
-            LogComplete();
-            Console.WriteLine("Agent start failed.");
-            Console.WriteLine("Updater exiting.");
-            Environment.Exit(ExitCodes.UnexpectedError);
-        }
-
-        logger.Log("[STEP] Agent start completed.");
-
         if (!TryPersistAgentHandoffComplete())
         {
             logger.Log("[ERROR] Agent update finished but handoff-complete marker could not be persisted.");
@@ -316,6 +302,20 @@ try
             Console.WriteLine("Updater exiting.");
             Environment.Exit(ExitCodes.UnexpectedError);
         }
+
+        logger.Log($"[STEP] Agent start begins for service: {serviceName}");
+        Console.WriteLine("Agent start begins.");
+        if (!agentServiceHelper.TryStartAgentService(serviceName))
+        {
+            logger.Log("[ERROR] Agent start failed after file replacement and handoff-complete checkpoint persistence.");
+            skippedCount++;
+            LogComplete();
+            Console.WriteLine("Agent start failed.");
+            Console.WriteLine("Updater exiting.");
+            Environment.Exit(ExitCodes.UnexpectedError);
+        }
+
+        logger.Log("[STEP] Agent start completed.");
 
         logger.Log("[SUCCESS] Agent update completed successfully.");
         updatedCount++;

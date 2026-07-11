@@ -53,7 +53,7 @@ public sealed class UnifiedInstallCheckpointValidator : IUnifiedInstallCheckpoin
 {
     private const int CurrentCheckpointSchemaVersion = 2;
     private static readonly TimeSpan HandoffCompletionFreshness = TimeSpan.FromHours(1);
-    private static readonly TimeSpan HandoffInProgressFreshness = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan HandoffInProgressGrace = TimeSpan.FromSeconds(30);
     private const int MaxResumeAttempts = 3;
     private static readonly TimeSpan StaleCheckpointAge = TimeSpan.FromMinutes(15);
     private readonly global::StorageWatch.Services.AutoUpdate.IInstallPathResolver _installPathResolver;
@@ -96,6 +96,19 @@ public sealed class UnifiedInstallCheckpointValidator : IUnifiedInstallCheckpoin
                 return Stale("Handoff completion timestamp is earlier than handoff start timestamp.", Array.Empty<string>(), isCorrupted: true);
             }
 
+            if (checkpoint.AgentExitRequestedAtUtc.HasValue)
+            {
+                if (checkpoint.AgentExitRequestedAtUtc.Value < checkpoint.HandoffStartedAtUtc.Value)
+                {
+                    return Stale("Agent exit-requested timestamp is earlier than handoff start timestamp.", Array.Empty<string>(), isCorrupted: true);
+                }
+
+                if (checkpoint.HandoffCompletedAtUtc.Value < checkpoint.AgentExitRequestedAtUtc.Value)
+                {
+                    return Stale("Handoff completion timestamp is earlier than Agent exit-requested timestamp.", Array.Empty<string>(), isCorrupted: true);
+                }
+            }
+
             var completionAge = DateTimeOffset.UtcNow - checkpoint.HandoffCompletedAtUtc.Value;
             if (completionAge > HandoffCompletionFreshness)
             {
@@ -128,17 +141,39 @@ public sealed class UnifiedInstallCheckpointValidator : IUnifiedInstallCheckpoin
                 return Stale("Handoff exit-requested state is missing AgentExitRequestedAtUtc marker.", Array.Empty<string>(), isCorrupted: true);
             }
 
-            var handoffAgeSource = checkpoint.AgentExitRequestedAtUtc ?? checkpoint.HandoffStartedAtUtc.Value;
-            var handoffAge = DateTimeOffset.UtcNow - handoffAgeSource;
-            if (handoffAge > HandoffInProgressFreshness)
+            if (checkpoint.AgentExitRequestedAtUtc.HasValue
+                && checkpoint.AgentExitRequestedAtUtc.Value < checkpoint.HandoffStartedAtUtc.Value)
             {
-                return Stale("In-progress handoff markers are stale without completion marker.", new[] { $"handoffAge={handoffAge.TotalMinutes:F1}m" }, isCorrupted: false);
+                return Stale("Agent exit-requested timestamp is earlier than handoff start timestamp.", Array.Empty<string>(), isCorrupted: true);
             }
 
-            return Stale("In-progress handoff is missing completion marker.", new[]
+            var handoffAgeSource = checkpoint.AgentExitRequestedAtUtc ?? checkpoint.HandoffStartedAtUtc.Value;
+            var handoffAge = DateTimeOffset.UtcNow - handoffAgeSource;
+            var updaterProcessRunning = checkpoint.UpdaterProcessId.HasValue
+                                        && IsProcessRunning(checkpoint.UpdaterProcessId.Value);
+
+            if (updaterProcessRunning || handoffAge <= HandoffInProgressGrace)
+            {
+                return new UnifiedInstallCheckpointValidationResult
+                {
+                    State = UnifiedInstallResumeState.InProgress,
+                    Reason = "In-progress handoff markers are within grace window or updater process is still active.",
+                    Signals = new[]
+                    {
+                        $"handoffState={checkpoint.HandoffState}",
+                        $"handoffStartedAt={checkpoint.HandoffStartedAtUtc.Value:O}",
+                        $"handoffAgeSeconds={handoffAge.TotalSeconds:F1}",
+                        $"updaterRunning={updaterProcessRunning}"
+                    }
+                };
+            }
+
+            return Stale("In-progress handoff is missing completion marker and is beyond grace without active updater.", new[]
             {
                 $"handoffState={checkpoint.HandoffState}",
-                $"handoffStartedAt={checkpoint.HandoffStartedAtUtc.Value:O}"
+                $"handoffStartedAt={checkpoint.HandoffStartedAtUtc.Value:O}",
+                $"handoffAgeSeconds={handoffAge.TotalSeconds:F1}",
+                $"updaterRunning={updaterProcessRunning}"
             }, isCorrupted: false);
         }
 
@@ -407,6 +442,19 @@ public sealed class UnifiedInstallCheckpointValidator : IUnifiedInstallCheckpoin
             var fileVersion = FileVersionInfo.GetVersionInfo(filePath).FileVersion;
             versionText = string.IsNullOrWhiteSpace(fileVersion) ? string.Empty : fileVersion;
             return !string.IsNullOrWhiteSpace(fileVersion) && Version.TryParse(fileVersion, out version);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsProcessRunning(int processId)
+    {
+        try
+        {
+            var process = Process.GetProcessById(processId);
+            return !process.HasExited;
         }
         catch
         {

@@ -557,11 +557,11 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
                 checkpoint.HandoffState = AgentHandoffState.ExitRequested;
                 await _checkpointStore.SaveCheckpointAsync(checkpoint, cancellationToken);
 
-                SetProgress(orchestrationId, "handoff", component, "Updater handoff started. Agent shutdown requested...", ComputePercent(result.UpdatedComponents.Count, checkpoint.Components.Count), true);
+                SetProgress(orchestrationId, "handoff", component, "Updater handoff started. Awaiting updater-owned handoff completion marker before Agent restart...", ComputePercent(result.UpdatedComponents.Count, checkpoint.Components.Count), true);
                 result.Success = true;
                 result.RestartRequired = true;
                 result.CompletedAtUtc = DateTimeOffset.UtcNow;
-                _logger.LogInformation("[AUTOUPDATE] Agent handoff launched updater process {ProcessId}; requesting host shutdown.", detached.ProcessId);
+                _logger.LogInformation("[AUTOUPDATE] Agent handoff launched updater process {ProcessId}; requesting host shutdown. Updater is responsible for persisting handoff completion marker.", detached.ProcessId);
                 _hostApplicationLifetime.StopApplication();
                 return result;
             }

@@ -683,6 +683,29 @@ namespace StorageWatch.Tests.UnitTests
         }
 
         [Fact]
+        public void UnifiedInstallCheckpointValidator_ReturnsInProgress_ForFreshIncompleteAgentHandoff()
+        {
+            var root = TestHelpers.CreateTempDirectory();
+            var installedVersion = CreateVersionedInstallLayout(root);
+            var targetVersion = new Version(installedVersion.Major + 1, 0, 0, 0).ToString();
+            var now = DateTimeOffset.UtcNow;
+            var checkpoint = CreateCheckpoint("agent", ComponentInstallState.InProgress, targetVersion, now, includeZip: true);
+            checkpoint.HandoffStartedAtUtc = now;
+            checkpoint.AgentExitRequestedAtUtc = now;
+            checkpoint.HandoffState = AgentHandoffState.ExitRequested;
+
+            var validator = new UnifiedInstallCheckpointValidator(
+                new StubInstallPathResolver(root),
+                new TestLogger<UnifiedInstallCheckpointValidator>());
+
+            var result = validator.Validate(checkpoint);
+
+            result.State.Should().Be(UnifiedInstallResumeState.InProgress);
+            result.ShouldResume.Should().BeTrue();
+            result.ShouldDelete.Should().BeFalse();
+        }
+
+        [Fact]
         public async Task UnifiedInstallResumeService_DeletesStaleCheckpointAndDoesNotResume()
         {
             var root = TestHelpers.CreateTempDirectory();
@@ -735,6 +758,68 @@ namespace StorageWatch.Tests.UnitTests
 
             orchestrator.ResumeCallCount.Should().Be(1);
             (await store.CheckpointExistsAsync()).Should().BeTrue();
+        }
+
+        [Fact]
+        public async Task UnifiedInstallResumeService_PreservesFreshIncompleteAgentHandoffCheckpoint()
+        {
+            var root = TestHelpers.CreateTempDirectory();
+            var installedVersion = CreateVersionedInstallLayout(root);
+            var targetVersion = new Version(installedVersion.Major + 1, 0, 0, 0).ToString();
+            var now = DateTimeOffset.UtcNow;
+            var checkpoint = CreateCheckpoint("agent", ComponentInstallState.InProgress, targetVersion, now, includeZip: true);
+            checkpoint.HandoffStartedAtUtc = now;
+            checkpoint.AgentExitRequestedAtUtc = now;
+            checkpoint.HandoffState = AgentHandoffState.ExitRequested;
+
+            var store = new InMemoryCheckpointStore();
+            await store.SaveCheckpointAsync(checkpoint, CancellationToken.None);
+
+            var validator = new UnifiedInstallCheckpointValidator(
+                new StubInstallPathResolver(root),
+                new TestLogger<UnifiedInstallCheckpointValidator>());
+            var orchestrator = new RecordingUnifiedInstallOrchestrator();
+            var service = new UnifiedInstallResumeService(
+                store,
+                validator,
+                orchestrator,
+                new TestLogger<UnifiedInstallResumeService>());
+
+            await service.StartAsync(CancellationToken.None);
+
+            orchestrator.ResumeCallCount.Should().Be(0);
+            (await store.CheckpointExistsAsync()).Should().BeTrue();
+        }
+
+        [Fact]
+        public async Task UnifiedInstallResumeService_DeletesStaleIncompleteAgentHandoffCheckpoint()
+        {
+            var root = TestHelpers.CreateTempDirectory();
+            var installedVersion = CreateVersionedInstallLayout(root);
+            var targetVersion = new Version(installedVersion.Major + 1, 0, 0, 0).ToString();
+            var old = DateTimeOffset.UtcNow - TimeSpan.FromMinutes(2);
+            var checkpoint = CreateCheckpoint("agent", ComponentInstallState.InProgress, targetVersion, old, includeZip: true);
+            checkpoint.HandoffStartedAtUtc = old;
+            checkpoint.AgentExitRequestedAtUtc = old;
+            checkpoint.HandoffState = AgentHandoffState.ExitRequested;
+
+            var store = new InMemoryCheckpointStore();
+            await store.SaveCheckpointAsync(checkpoint, CancellationToken.None);
+
+            var validator = new UnifiedInstallCheckpointValidator(
+                new StubInstallPathResolver(root),
+                new TestLogger<UnifiedInstallCheckpointValidator>());
+            var orchestrator = new RecordingUnifiedInstallOrchestrator();
+            var service = new UnifiedInstallResumeService(
+                store,
+                validator,
+                orchestrator,
+                new TestLogger<UnifiedInstallResumeService>());
+
+            await service.StartAsync(CancellationToken.None);
+
+            orchestrator.ResumeCallCount.Should().Be(0);
+            (await store.CheckpointExistsAsync()).Should().BeFalse();
         }
 
         [Fact]
