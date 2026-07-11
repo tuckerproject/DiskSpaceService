@@ -17,52 +17,97 @@ internal class AgentRestartHelper
         _diagnosticLogger?.Invoke($"[DIAG] {message}");
     }
 
-    public bool TryRestartAgentService(string serviceName)
+    public bool TryStopAgentService(string serviceName)
     {
-        LogDiag($"Restart requested. Component=agent, ServiceName={serviceName}");
+        LogDiag($"Stop requested. Component=agent, ServiceName={serviceName}");
         if (!OperatingSystem.IsWindows())
         {
-            Console.WriteLine("Agent service restart skipped.");
-            LogDiag("Service restart skipped because current OS is not Windows.");
+            Console.WriteLine("Agent service stop skipped.");
+            LogDiag("Service stop skipped because current OS is not Windows.");
             return false;
         }
 
         if (string.IsNullOrWhiteSpace(serviceName))
         {
-            Console.WriteLine("Agent service restart skipped.");
-            LogDiag("Service restart skipped because service name is empty.");
+            Console.WriteLine("Agent service stop skipped.");
+            LogDiag("Service stop skipped because service name is empty.");
             return false;
         }
 
         try
         {
-            Console.WriteLine("Agent service restart begins.");
+            Console.WriteLine("Agent service stop begins.");
 
             using var serviceController = new ServiceController(serviceName);
             var statusBefore = serviceController.Status;
-            LogDiag($"Service restart: {serviceName}, StatusBefore={statusBefore}");
+            LogDiag($"Service stop: {serviceName}, StatusBefore={statusBefore}");
 
             if (serviceController.Status != ServiceControllerStatus.Stopped &&
                 serviceController.Status != ServiceControllerStatus.StopPending)
             {
                 serviceController.Stop();
                 serviceController.WaitForStatus(ServiceControllerStatus.Stopped, DefaultTimeout);
-                LogDiag($"Service restart: {serviceName}, Transition=Stopped");
+                LogDiag($"Service stop: {serviceName}, Transition=Stopped");
             }
 
-            serviceController.Start();
-            serviceController.WaitForStatus(ServiceControllerStatus.Running, DefaultTimeout);
-            var statusAfter = serviceController.Status;
-            LogDiag($"Service restart: {serviceName}, StatusAfter={statusAfter}");
-
-            Console.WriteLine("Agent service restart completed.");
+            Console.WriteLine("Agent service stop completed.");
             return true;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Agent service restart failed: {ex.Message}");
-            LogDiag($"Service restart failed: {serviceName}, Error={ex.GetType().Name}: {ex.Message}");
+            Console.WriteLine($"Agent service stop failed: {ex.Message}");
+            LogDiag($"Service stop failed: {serviceName}, Error={ex.GetType().Name}: {ex.Message}");
             return false;
         }
+    }
+
+    public bool TryStartAgentService(string serviceName)
+    {
+        LogDiag($"Start requested. Component=agent, ServiceName={serviceName}");
+        if (!OperatingSystem.IsWindows())
+        {
+            Console.WriteLine("Agent service start skipped.");
+            LogDiag("Service start skipped because current OS is not Windows.");
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(serviceName))
+        {
+            Console.WriteLine("Agent service start skipped.");
+            LogDiag("Service start skipped because service name is empty.");
+            return false;
+        }
+
+        try
+        {
+            Console.WriteLine("Agent service start begins.");
+
+            using var serviceController = new ServiceController(serviceName);
+            var statusBefore = serviceController.Status;
+            LogDiag($"Service start: {serviceName}, StatusBefore={statusBefore}");
+
+            serviceController.Start();
+            serviceController.WaitForStatus(ServiceControllerStatus.Running, DefaultTimeout);
+            var statusAfter = serviceController.Status;
+            LogDiag($"Service start: {serviceName}, StatusAfter={statusAfter}");
+
+            Console.WriteLine("Agent service start completed.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Agent service start failed: {ex.Message}");
+            LogDiag($"Service start failed: {serviceName}, Error={ex.GetType().Name}: {ex.Message}");
+            return false;
+        }
+    }
+
+    public bool TryRestartAgentService(string serviceName)
+    {
+        LogDiag($"Restart requested. Component=agent, ServiceName={serviceName}");
+        if (!TryStopAgentService(serviceName))
+            return false;
+
+        return TryStartAgentService(serviceName);
     }
 }

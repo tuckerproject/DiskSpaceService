@@ -68,6 +68,37 @@ public class UnifiedInstallResumeService : IHostedService
                 checkpoint.Components.Count,
                 checkpoint.LastUpdatedAtUtc);
 
+            var hasAgentComponent = checkpoint.Components.Contains("agent", StringComparer.OrdinalIgnoreCase);
+            var hasHandoffState = checkpoint.HandoffState != AgentHandoffState.None
+                                  || checkpoint.HandoffStartedAtUtc.HasValue
+                                  || checkpoint.AgentExitRequestedAtUtc.HasValue
+                                  || checkpoint.HandoffCompletedAtUtc.HasValue;
+
+            if (hasAgentComponent && hasHandoffState)
+            {
+                if (checkpoint.HandoffCompletedAtUtc.HasValue)
+                {
+                    _logger.LogInformation(
+                        "[AUTOUPDATE] Checkpoint {OrchestrationId} contains handoff-complete marker at {CompletedAt}; clearing checkpoint.",
+                        checkpoint.OrchestrationId,
+                        checkpoint.HandoffCompletedAtUtc.Value);
+                    await DeleteCheckpointSafelyAsync(cancellationToken, "agent handoff completed");
+                    return;
+                }
+
+                var markerAgeSource = checkpoint.AgentExitRequestedAtUtc
+                                      ?? checkpoint.HandoffStartedAtUtc
+                                      ?? checkpoint.LastUpdatedAtUtc;
+                var markerAge = DateTimeOffset.UtcNow - markerAgeSource;
+                _logger.LogWarning(
+                    "[AUTOUPDATE] Checkpoint {OrchestrationId} has incomplete Agent handoff markers (State={State}, Age={AgeMinutes:F1}m) without handoff-complete marker; treating as failed handoff and clearing checkpoint.",
+                    checkpoint.OrchestrationId,
+                    checkpoint.HandoffState,
+                    markerAge.TotalMinutes);
+                await DeleteCheckpointSafelyAsync(cancellationToken, "incomplete or stale agent handoff");
+                return;
+            }
+
             if (!checkpoint.IsInstalling)
             {
                 _logger.LogInformation(

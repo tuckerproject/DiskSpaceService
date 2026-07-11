@@ -342,7 +342,6 @@ namespace StorageWatch.Tests.UnitTests
         [Theory]
         [InlineData("ui")]
         [InlineData("server")]
-        [InlineData("agent")]
         public async Task UnifiedInstallOrchestrator_StopVerificationFails_SkipsUpdaterLaunch(string component)
         {
             var checker = new StubUnifiedUpdateChecker(new UnifiedUpdateStatusInfo

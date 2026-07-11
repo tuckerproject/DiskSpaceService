@@ -60,7 +60,7 @@ public class ComponentUpdateFlowIntegrationTests : IDisposable
 
     [Fact]
     [Trait("Category", "Integration")]
-    public async Task UpdateAgent_WhenSourceAndTargetValid_ShouldCopyFilesAndExitSuccess()
+    public async Task UpdateAgent_WhenServiceStopFails_ShouldExitWithErrorBeforeCopy()
     {
         var updaterExe = TestArtifactLocator.GetUpdaterExePath();
         if (!File.Exists(updaterExe))
@@ -81,8 +81,8 @@ public class ComponentUpdateFlowIntegrationTests : IDisposable
                 ["STORAGEWATCH_AGENT_SERVICE_NAME"] = "StorageWatchAgent_DoesNotExist_Test"
             });
 
-        exitCode.Should().Be(0, $"stdout: {stdOut}{Environment.NewLine}stderr: {stdErr}");
-        File.ReadAllText(Path.Combine(target, "agent-content.txt")).Should().Be("agent-update");
+        exitCode.Should().Be(2, $"stdout: {stdOut}{Environment.NewLine}stderr: {stdErr}");
+        File.Exists(Path.Combine(target, "agent-content.txt")).Should().BeFalse();
     }
 
     public void Dispose()

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO.Compression;
 using System.ServiceProcess;
 using System.Text.Json;
+using Microsoft.Extensions.Hosting;
 using StorageWatch.Shared.Update.Models;
 using StorageWatchAgent.Services.AutoUpdate;
 using StorageWatchAgent.Services.AutoUpdate.Models;
@@ -32,9 +33,11 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
     private readonly IServiceUpdateDownloader _serviceUpdateDownloader;
     private readonly IInstallPathResolver _installPathResolver;
     private readonly IUnifiedInstallCheckpointStore _checkpointStore;
+    private readonly IHostApplicationLifetime _hostApplicationLifetime;
     private readonly ILogger<UnifiedInstallOrchestrator> _logger;
     private readonly Func<string, CancellationToken, Task<(bool Success, string? ErrorMessage)>>? _stopComponentBeforeUpdateOverride;
     private readonly Func<string, IReadOnlyList<string>, string, (bool Success, string? ErrorMessage)> _runUpdaterProcess;
+    private readonly Func<string, IReadOnlyList<string>, string, (bool Success, int? ProcessId, string? ErrorMessage)> _runUpdaterProcessDetached;
     private readonly Func<string, TimeSpan, (bool Success, string? ErrorMessage)> _stopWindowsService;
     private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
     private readonly SemaphoreSlim _orchestrationGate = new(1, 1);
@@ -58,6 +61,15 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
         CompletedAtUtc = DateTimeOffset.MinValue
     };
 
+    private sealed class NoOpHostApplicationLifetime : IHostApplicationLifetime
+    {
+        public static readonly NoOpHostApplicationLifetime Instance = new();
+        public CancellationToken ApplicationStarted => CancellationToken.None;
+        public CancellationToken ApplicationStopping => CancellationToken.None;
+        public CancellationToken ApplicationStopped => CancellationToken.None;
+        public void StopApplication() { }
+    }
+
     public UnifiedInstallOrchestrator(
         IUnifiedUpdateChecker unifiedUpdateChecker,
         IServiceUpdateDownloader serviceUpdateDownloader,
@@ -66,6 +78,34 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
         ILogger<UnifiedInstallOrchestrator> logger,
         Func<string, CancellationToken, Task<(bool Success, string? ErrorMessage)>>? stopComponentBeforeUpdate = null,
         Func<string, IReadOnlyList<string>, string, (bool Success, string? ErrorMessage)>? runUpdaterProcess = null,
+        Func<string, IReadOnlyList<string>, string, (bool Success, int? ProcessId, string? ErrorMessage)>? runUpdaterProcessDetached = null,
+        Func<string, TimeSpan, (bool Success, string? ErrorMessage)>? stopWindowsService = null,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
+        : this(
+            unifiedUpdateChecker,
+            serviceUpdateDownloader,
+            installPathResolver,
+            checkpointStore,
+            NoOpHostApplicationLifetime.Instance,
+            logger,
+            stopComponentBeforeUpdate,
+            runUpdaterProcess,
+            runUpdaterProcessDetached,
+            stopWindowsService,
+            delayAsync)
+    {
+    }
+
+    public UnifiedInstallOrchestrator(
+        IUnifiedUpdateChecker unifiedUpdateChecker,
+        IServiceUpdateDownloader serviceUpdateDownloader,
+        IInstallPathResolver installPathResolver,
+        IUnifiedInstallCheckpointStore checkpointStore,
+        IHostApplicationLifetime hostApplicationLifetime,
+        ILogger<UnifiedInstallOrchestrator> logger,
+        Func<string, CancellationToken, Task<(bool Success, string? ErrorMessage)>>? stopComponentBeforeUpdate = null,
+        Func<string, IReadOnlyList<string>, string, (bool Success, string? ErrorMessage)>? runUpdaterProcess = null,
+        Func<string, IReadOnlyList<string>, string, (bool Success, int? ProcessId, string? ErrorMessage)>? runUpdaterProcessDetached = null,
         Func<string, TimeSpan, (bool Success, string? ErrorMessage)>? stopWindowsService = null,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
     {
@@ -73,9 +113,11 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
         _serviceUpdateDownloader = serviceUpdateDownloader ?? throw new ArgumentNullException(nameof(serviceUpdateDownloader));
         _installPathResolver = installPathResolver ?? throw new ArgumentNullException(nameof(installPathResolver));
         _checkpointStore = checkpointStore ?? throw new ArgumentNullException(nameof(checkpointStore));
+        _hostApplicationLifetime = hostApplicationLifetime ?? throw new ArgumentNullException(nameof(hostApplicationLifetime));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _stopComponentBeforeUpdateOverride = stopComponentBeforeUpdate;
         _runUpdaterProcess = runUpdaterProcess ?? RunUpdaterProcess;
+        _runUpdaterProcessDetached = runUpdaterProcessDetached ?? RunUpdaterProcessDetached;
         _stopWindowsService = stopWindowsService ?? StopWindowsServiceByName;
         _delayAsync = delayAsync ?? Task.Delay;
     }
@@ -152,10 +194,19 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
 
             var result = await ExecuteInstallPlanAsync(orchestrationId, startedAt, checkpoint, cancellationToken);
 
-            // Clear checkpoint on completion
-            checkpoint.IsInstalling = false;
-            await _checkpointStore.ClearCheckpointAsync(cancellationToken);
-            await _unifiedUpdateChecker.SetInstallingStateAsync(false, cancellationToken);
+            var handoffActive = checkpoint.HandoffState == AgentHandoffState.ExitRequested
+                                && checkpoint.Components.Contains("agent", StringComparer.OrdinalIgnoreCase)
+                                && checkpoint.ComponentStates.Any(state =>
+                                    string.Equals(state.Component, "agent", StringComparison.OrdinalIgnoreCase)
+                                    && state.State == ComponentInstallState.InProgress);
+
+            if (!handoffActive)
+            {
+                // Clear checkpoint on completion when no detached handoff is pending.
+                checkpoint.IsInstalling = false;
+                await _checkpointStore.ClearCheckpointAsync(cancellationToken);
+                await _unifiedUpdateChecker.SetInstallingStateAsync(false, cancellationToken);
+            }
 
             SetProgress(
                 orchestrationId,
@@ -263,10 +314,19 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
                 checkpoint,
                 cancellationToken);
 
-            // Clear checkpoint after resume completes
-            checkpoint.IsInstalling = false;
-            await _checkpointStore.ClearCheckpointAsync(cancellationToken);
-            await _unifiedUpdateChecker.SetInstallingStateAsync(false, cancellationToken);
+            var handoffActive = checkpoint.HandoffState == AgentHandoffState.ExitRequested
+                                && checkpoint.Components.Contains("agent", StringComparer.OrdinalIgnoreCase)
+                                && checkpoint.ComponentStates.Any(state =>
+                                    string.Equals(state.Component, "agent", StringComparison.OrdinalIgnoreCase)
+                                    && state.State == ComponentInstallState.InProgress);
+
+            if (!handoffActive)
+            {
+                // Clear checkpoint after resume completes when detached handoff is not pending.
+                checkpoint.IsInstalling = false;
+                await _checkpointStore.ClearCheckpointAsync(cancellationToken);
+                await _unifiedUpdateChecker.SetInstallingStateAsync(false, cancellationToken);
+            }
 
             SetProgress(
                 checkpoint.OrchestrationId,
@@ -455,17 +515,55 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
                 _logger.LogDebug(ex, "[DIAG] Failed to read updater version at invocation from {Path}", invocation.UpdaterPath);
             }
 
-            var stop = await StopComponentBeforeUpdateAsync(component, cancellationToken);
-            if (!stop.Success)
+            var isAgentComponent = string.Equals(component, "agent", StringComparison.OrdinalIgnoreCase);
+            if (!isAgentComponent)
             {
-                componentState.State = ComponentInstallState.Failed;
-                _logger.LogDebug("[DIAG] Component execution state: Component={Component}, State={State}", component, componentState.State);
-                componentState.ErrorMessage = stop.ErrorMessage ?? $"Failed to stop component '{component}' before update.";
-                result.FailedComponents.Add(component);
-                result.ErrorMessage = componentState.ErrorMessage;
+                var stop = await StopComponentBeforeUpdateAsync(component, cancellationToken);
+                if (!stop.Success)
+                {
+                    componentState.State = ComponentInstallState.Failed;
+                    _logger.LogDebug("[DIAG] Component execution state: Component={Component}, State={State}", component, componentState.State);
+                    componentState.ErrorMessage = stop.ErrorMessage ?? $"Failed to stop component '{component}' before update.";
+                    result.FailedComponents.Add(component);
+                    result.ErrorMessage = componentState.ErrorMessage;
+                    await _checkpointStore.SaveCheckpointAsync(checkpoint, cancellationToken);
+                    SetProgress(orchestrationId, "failed", component, result.ErrorMessage, ComputePercent(result.UpdatedComponents.Count, checkpoint.Components.Count), false);
+                    break;
+                }
+            }
+
+            if (isAgentComponent)
+            {
+                checkpoint.HandoffStartedAtUtc = DateTimeOffset.UtcNow;
+                checkpoint.HandoffState = AgentHandoffState.Started;
+                checkpoint.ResumeAttemptCount = 0;
                 await _checkpointStore.SaveCheckpointAsync(checkpoint, cancellationToken);
-                SetProgress(orchestrationId, "failed", component, result.ErrorMessage, ComputePercent(result.UpdatedComponents.Count, checkpoint.Components.Count), false);
-                break;
+
+                var detached = _runUpdaterProcessDetached(invocation.UpdaterPath, invocation.Arguments, invocation.WorkingDirectory);
+                if (!detached.Success)
+                {
+                    componentState.State = ComponentInstallState.Failed;
+                    componentState.ErrorMessage = detached.ErrorMessage ?? "Failed to start detached updater process.";
+                    checkpoint.HandoffState = AgentHandoffState.Failed;
+                    result.FailedComponents.Add(component);
+                    result.ErrorMessage = componentState.ErrorMessage;
+                    await _checkpointStore.SaveCheckpointAsync(checkpoint, cancellationToken);
+                    SetProgress(orchestrationId, "failed", component, result.ErrorMessage, ComputePercent(result.UpdatedComponents.Count, checkpoint.Components.Count), false);
+                    break;
+                }
+
+                checkpoint.UpdaterProcessId = detached.ProcessId;
+                checkpoint.AgentExitRequestedAtUtc = DateTimeOffset.UtcNow;
+                checkpoint.HandoffState = AgentHandoffState.ExitRequested;
+                await _checkpointStore.SaveCheckpointAsync(checkpoint, cancellationToken);
+
+                SetProgress(orchestrationId, "handoff", component, "Updater handoff started. Agent shutdown requested...", ComputePercent(result.UpdatedComponents.Count, checkpoint.Components.Count), true);
+                result.Success = true;
+                result.RestartRequired = true;
+                result.CompletedAtUtc = DateTimeOffset.UtcNow;
+                _logger.LogInformation("[AUTOUPDATE] Agent handoff launched updater process {ProcessId}; requesting host shutdown.", detached.ProcessId);
+                _hostApplicationLifetime.StopApplication();
+                return result;
             }
 
             // Run updater
@@ -902,6 +1000,30 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
         }
 
         return (true, null);
+    }
+
+    private static (bool Success, int? ProcessId, string? ErrorMessage) RunUpdaterProcessDetached(string updaterPath, IReadOnlyList<string> args, string workingDirectory)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = updaterPath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = workingDirectory
+        };
+
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        var process = Process.Start(startInfo);
+        if (process == null)
+        {
+            return (false, null, "Updater process could not be started.");
+        }
+
+        return (true, process.Id, null);
     }
 
     private static string ResolveTargetDirectory(string component, ResolvedInstallPaths paths)

@@ -6,6 +6,11 @@ namespace StorageWatchAgent.Services.AutoUpdate.Models;
 public class UnifiedInstallCheckpoint
 {
     /// <summary>
+    /// Schema version for persisted checkpoint compatibility.
+    /// </summary>
+    public int SchemaVersion { get; set; } = 2;
+
+    /// <summary>
     /// Unique identifier for this orchestration instance.
     /// </summary>
     public string OrchestrationId { get; set; } = string.Empty;
@@ -54,6 +59,45 @@ public class UnifiedInstallCheckpoint
     /// Overall error message if the orchestration failed.
     /// </summary>
     public string? ErrorMessage { get; set; }
+
+    /// <summary>
+    /// Timestamp when detached updater handoff started.
+    /// </summary>
+    public DateTimeOffset? HandoffStartedAtUtc { get; set; }
+
+    /// <summary>
+    /// Timestamp when Agent shutdown was requested for handoff.
+    /// </summary>
+    public DateTimeOffset? AgentExitRequestedAtUtc { get; set; }
+
+    /// <summary>
+    /// Timestamp when updater completed Agent stop-copy-start handoff.
+    /// </summary>
+    public DateTimeOffset? HandoffCompletedAtUtc { get; set; }
+
+    /// <summary>
+    /// Process ID of detached updater for diagnostics and recovery.
+    /// </summary>
+    public int? UpdaterProcessId { get; set; }
+
+    /// <summary>
+    /// Current handoff lifecycle state.
+    /// </summary>
+    public AgentHandoffState HandoffState { get; set; } = AgentHandoffState.None;
+
+    /// <summary>
+    /// Number of startup resume attempts for loop prevention.
+    /// </summary>
+    public int ResumeAttemptCount { get; set; }
+}
+
+public enum AgentHandoffState
+{
+    None,
+    Started,
+    ExitRequested,
+    Completed,
+    Failed
 }
 
 /// <summary>

@@ -51,6 +51,10 @@ public interface IUnifiedInstallCheckpointValidator
 
 public sealed class UnifiedInstallCheckpointValidator : IUnifiedInstallCheckpointValidator
 {
+    private const int CurrentCheckpointSchemaVersion = 2;
+    private static readonly TimeSpan HandoffCompletionFreshness = TimeSpan.FromHours(1);
+    private static readonly TimeSpan HandoffInProgressFreshness = TimeSpan.FromMinutes(10);
+    private const int MaxResumeAttempts = 3;
     private static readonly TimeSpan StaleCheckpointAge = TimeSpan.FromMinutes(15);
     private readonly global::StorageWatch.Services.AutoUpdate.IInstallPathResolver _installPathResolver;
     private readonly ILogger<UnifiedInstallCheckpointValidator> _logger;
@@ -68,6 +72,74 @@ public sealed class UnifiedInstallCheckpointValidator : IUnifiedInstallCheckpoin
         if (checkpoint == null)
         {
             return Corrupted("Checkpoint data was null.");
+        }
+
+        if (checkpoint.SchemaVersion <= 0 || checkpoint.SchemaVersion > CurrentCheckpointSchemaVersion)
+        {
+            return Corrupted($"Unsupported checkpoint schema version: {checkpoint.SchemaVersion}.");
+        }
+
+        if (checkpoint.ResumeAttemptCount > MaxResumeAttempts)
+        {
+            return Stale($"Checkpoint exceeded max resume attempts ({MaxResumeAttempts}).", new[] { $"resumeAttempts={checkpoint.ResumeAttemptCount}" }, isCorrupted: false);
+        }
+
+        if (checkpoint.HandoffCompletedAtUtc.HasValue)
+        {
+            if (!checkpoint.HandoffStartedAtUtc.HasValue)
+            {
+                return Stale("Handoff completion marker exists without handoff start marker.", Array.Empty<string>(), isCorrupted: true);
+            }
+
+            if (checkpoint.HandoffCompletedAtUtc.Value < checkpoint.HandoffStartedAtUtc.Value)
+            {
+                return Stale("Handoff completion timestamp is earlier than handoff start timestamp.", Array.Empty<string>(), isCorrupted: true);
+            }
+
+            var completionAge = DateTimeOffset.UtcNow - checkpoint.HandoffCompletedAtUtc.Value;
+            if (completionAge > HandoffCompletionFreshness)
+            {
+                return Stale("Handoff completion marker is stale.", new[] { $"handoffCompletionAge={completionAge.TotalMinutes:F1}m" }, isCorrupted: false);
+            }
+
+            return new UnifiedInstallCheckpointValidationResult
+            {
+                State = UnifiedInstallResumeState.Completed,
+                Reason = "Checkpoint contains valid handoff-complete marker.",
+                Signals = new[]
+                {
+                    $"handoffStartedAt={checkpoint.HandoffStartedAtUtc.Value:O}",
+                    $"handoffCompletedAt={checkpoint.HandoffCompletedAtUtc.Value:O}"
+                }
+            };
+        }
+
+        if (checkpoint.HandoffState != AgentHandoffState.None
+            || checkpoint.HandoffStartedAtUtc.HasValue
+            || checkpoint.AgentExitRequestedAtUtc.HasValue)
+        {
+            if (!checkpoint.HandoffStartedAtUtc.HasValue)
+            {
+                return Stale("Partial handoff state exists without handoff start marker.", Array.Empty<string>(), isCorrupted: true);
+            }
+
+            if (checkpoint.HandoffState == AgentHandoffState.ExitRequested && !checkpoint.AgentExitRequestedAtUtc.HasValue)
+            {
+                return Stale("Handoff exit-requested state is missing AgentExitRequestedAtUtc marker.", Array.Empty<string>(), isCorrupted: true);
+            }
+
+            var handoffAgeSource = checkpoint.AgentExitRequestedAtUtc ?? checkpoint.HandoffStartedAtUtc.Value;
+            var handoffAge = DateTimeOffset.UtcNow - handoffAgeSource;
+            if (handoffAge > HandoffInProgressFreshness)
+            {
+                return Stale("In-progress handoff markers are stale without completion marker.", new[] { $"handoffAge={handoffAge.TotalMinutes:F1}m" }, isCorrupted: false);
+            }
+
+            return Stale("In-progress handoff is missing completion marker.", new[]
+            {
+                $"handoffState={checkpoint.HandoffState}",
+                $"handoffStartedAt={checkpoint.HandoffStartedAtUtc.Value:O}"
+            }, isCorrupted: false);
         }
 
         var signals = new List<string>();

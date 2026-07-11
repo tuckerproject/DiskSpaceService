@@ -2,6 +2,7 @@ using StorageWatch.Updater;
 using StorageWatch.Updater.Services.Logging;
 using StorageWatch.Shared.Update.Models;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 // Initialize logging at the very start
 var logFilePath = LogDirectoryInitializer.GetLogFilePath("updater.log");
@@ -19,6 +20,45 @@ var skippedCount = 0;
 void LogComplete()
 {
     logger.Log($"[COMPLETE] Updater finished. Updated={updatedCount}, Skipped={skippedCount}");
+}
+
+bool TryPersistAgentHandoffComplete()
+{
+    try
+    {
+        var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+        var checkpointPath = Path.Combine(programData, "StorageWatch", "Update", "install-plan.json");
+        if (!File.Exists(checkpointPath))
+        {
+            logger.Log($"[WARN] Handoff-complete marker not persisted because checkpoint file was not found: {checkpointPath}");
+            return false;
+        }
+
+        var json = File.ReadAllText(checkpointPath);
+        var node = JsonNode.Parse(json) as JsonObject;
+        if (node == null)
+        {
+            logger.Log("[WARN] Handoff-complete marker not persisted because checkpoint JSON was invalid.");
+            return false;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        node["handoffCompletedAtUtc"] = now.ToString("O");
+        node["handoffState"] = "Completed";
+        node["lastUpdatedAtUtc"] = now.ToString("O");
+
+        var output = node.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        var tempPath = checkpointPath + ".tmp";
+        File.WriteAllText(tempPath, output);
+        File.Move(tempPath, checkpointPath, overwrite: true);
+        logger.Log($"[STEP] Persisted handoff-complete marker to checkpoint: {checkpointPath}");
+        return true;
+    }
+    catch (Exception ex)
+    {
+        logger.Log($"[WARN] Failed to persist handoff-complete marker: {ex.Message}");
+        return false;
+    }
 }
 
 try
@@ -201,9 +241,44 @@ try
 
         var fileReplacementEngine = new FileReplacementEngine();
 
+        var serviceName = Environment.GetEnvironmentVariable("STORAGEWATCH_AGENT_SERVICE_NAME");
+        if (string.IsNullOrWhiteSpace(serviceName))
+            serviceName = "StorageWatchAgent";
+
+        var agentServiceHelper = new AgentRestartHelper(logger.Log);
+
+        logger.Log($"[STEP] Agent stop begins for service: {serviceName}");
+        Console.WriteLine("Agent stop begins.");
+        if (!agentServiceHelper.TryStopAgentService(serviceName))
+        {
+            logger.Log("[ERROR] Agent stop failed before file replacement.");
+            skippedCount++;
+            LogComplete();
+            Console.WriteLine("Agent stop failed.");
+            Console.WriteLine("Updater exiting.");
+            Environment.Exit(ExitCodes.UnexpectedError);
+        }
+
+        logger.Log("[STEP] Agent stop completed.");
+
         logger.Log("[STEP] File replacement begins for Agent.");
         Console.WriteLine("File replacement begins.");
-        var replaced = fileReplacementEngine.TryCopyFilesFromStaging(arguments.SourcePath, arguments.TargetPath);
+        var replaced = false;
+        var retryDelay = TimeSpan.FromMilliseconds(500);
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            replaced = fileReplacementEngine.TryCopyFilesFromStaging(arguments.SourcePath, arguments.TargetPath);
+            if (replaced)
+                break;
+
+            logger.Log($"[STEP] Agent file replacement attempt {attempt} failed.");
+            if (attempt < 3)
+            {
+                logger.Log($"[STEP] Retrying Agent file replacement in {retryDelay.TotalMilliseconds}ms.");
+                await Task.Delay(retryDelay);
+                retryDelay = TimeSpan.FromMilliseconds(retryDelay.TotalMilliseconds * 2);
+            }
+        }
 
         if (!replaced)
         {
@@ -218,15 +293,29 @@ try
         logger.Log("[STEP] File replacement succeeded for Agent.");
         Console.WriteLine("File replacement succeeded.");
 
-        var serviceName = Environment.GetEnvironmentVariable("STORAGEWATCH_AGENT_SERVICE_NAME");
-        if (string.IsNullOrWhiteSpace(serviceName))
-            serviceName = "StorageWatchAgent";
+        logger.Log($"[STEP] Agent start begins for service: {serviceName}");
+        Console.WriteLine("Agent start begins.");
+        if (!agentServiceHelper.TryStartAgentService(serviceName))
+        {
+            logger.Log("[ERROR] Agent start failed after file replacement.");
+            skippedCount++;
+            LogComplete();
+            Console.WriteLine("Agent start failed.");
+            Console.WriteLine("Updater exiting.");
+            Environment.Exit(ExitCodes.UnexpectedError);
+        }
 
-        logger.Log($"[STEP] Agent restart begins for service: {serviceName}");
-        Console.WriteLine("Agent restart begins.");
-        var agentRestartHelper = new AgentRestartHelper(logger.Log);
-        agentRestartHelper.TryRestartAgentService(serviceName);
-        logger.Log("[STEP] Agent restart completed.");
+        logger.Log("[STEP] Agent start completed.");
+
+        if (!TryPersistAgentHandoffComplete())
+        {
+            logger.Log("[ERROR] Agent update finished but handoff-complete marker could not be persisted.");
+            skippedCount++;
+            LogComplete();
+            Console.WriteLine("Agent handoff completion marker write failed.");
+            Console.WriteLine("Updater exiting.");
+            Environment.Exit(ExitCodes.UnexpectedError);
+        }
 
         logger.Log("[SUCCESS] Agent update completed successfully.");
         updatedCount++;

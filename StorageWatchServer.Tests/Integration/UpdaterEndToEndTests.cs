@@ -53,7 +53,7 @@ namespace StorageWatchServer.Tests.Integration
         }
 
         [Fact]
-        public void AgentUpdateFlow_UpdaterReplacesFiles_AndTriggersAgentRestartPath()
+        public void AgentUpdateFlow_WhenServiceStopFails_UpdaterFailsBeforeCopy()
         {
             var updaterExe = EnsureUpdaterExePath();
             var testRoot = CreateTempDirectory();
@@ -87,11 +87,11 @@ namespace StorageWatchServer.Tests.Integration
 
             var result = RunUpdater(updaterExe, $"--update-agent --source \"{stagingDir}\" --target \"{installDir}\" --manifest \"{manifestPath}\" --restart-agent", env);
 
-            Assert.Equal(0, result.ExitCode);
-            Assert.Equal("agent-v2", File.ReadAllText(installPayloadPath));
-            Assert.Contains("File replacement begins.", result.Output, StringComparison.Ordinal);
-            Assert.Contains("File replacement succeeded.", result.Output, StringComparison.Ordinal);
-            Assert.Contains("Agent restart begins.", result.Output, StringComparison.Ordinal);
+            Assert.NotEqual(0, result.ExitCode);
+            Assert.Equal("agent-v1", File.ReadAllText(installPayloadPath));
+            Assert.Contains("Agent stop begins.", result.Output, StringComparison.Ordinal);
+            Assert.Contains("Agent stop failed.", result.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("File replacement begins.", result.Output, StringComparison.Ordinal);
             Assert.Contains("Updater exiting.", result.Output, StringComparison.Ordinal);
         }
 
@@ -147,7 +147,8 @@ namespace StorageWatchServer.Tests.Integration
             var serverResult = RunScenario(updaterExe, testRoot, "server", "StorageWatchServer.exe");
 
             Assert.Equal(0, uiResult.ExitCode);
-            Assert.Equal(0, agentResult.ExitCode);
+            Assert.NotEqual(0, agentResult.ExitCode);
+            Assert.Contains("Agent stop failed.", agentResult.Output, StringComparison.Ordinal);
             Assert.Equal(0, serverResult.ExitCode);
         }
 
@@ -473,8 +474,17 @@ namespace StorageWatchServer.Tests.Integration
             }
 
             var result = RunUpdater(updaterExe, $"--update-{component} --source \"{stagingDir}\" --target \"{installDir}\" --manifest \"{manifestPath}\" --restart-{component}", env);
-            Assert.Equal($"{component}-v2", File.ReadAllText(installPayloadPath));
-            Assert.Contains("File replacement succeeded.", result.Output, StringComparison.Ordinal);
+            if (string.Equals(component, "agent", StringComparison.OrdinalIgnoreCase))
+            {
+                Assert.Equal($"{component}-v1", File.ReadAllText(installPayloadPath));
+                Assert.Contains("Agent stop failed.", result.Output, StringComparison.Ordinal);
+                Assert.DoesNotContain("File replacement begins.", result.Output, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Equal($"{component}-v2", File.ReadAllText(installPayloadPath));
+                Assert.Contains("File replacement succeeded.", result.Output, StringComparison.Ordinal);
+            }
 
             return (result.ExitCode, result.Output);
         }
