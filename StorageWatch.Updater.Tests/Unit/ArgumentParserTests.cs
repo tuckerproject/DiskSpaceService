@@ -20,7 +20,8 @@ public class ArgumentParserTests
             "--source", "C:/temp/source",
             "--target", "C:/temp/target",
             "--self-update-staging", "C:/temp/staging",
-            "--continue-args", "ZW1wdHk="
+            "--continue-args", "ZW1wdHk=",
+            "--wait-for-pid", "1234"
         };
 
         var result = parser.TryParse(args);
@@ -38,6 +39,7 @@ public class ArgumentParserTests
         result.Arguments.TargetPath.Should().Be("C:/temp/target");
         result.Arguments.SelfUpdateStagingPath.Should().Be("C:/temp/staging");
         result.Arguments.ContinueArguments.Should().Be("ZW1wdHk=");
+        result.Arguments.WaitForPid.Should().Be(1234);
     }
 
     [Fact]
@@ -70,6 +72,7 @@ public class ArgumentParserTests
     [InlineData("--target")]
     [InlineData("--self-update-staging")]
     [InlineData("--continue-args")]
+    [InlineData("--wait-for-pid")]
     [Trait("Category", "Unit")]
     public void TryParse_WhenValueFlagMissingValue_ShouldFail(string flag)
     {
@@ -103,5 +106,17 @@ public class ArgumentParserTests
 
         result.Success.Should().BeFalse();
         result.Errors.Should().Contain(e => e.Contains("Only one component update flag", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void TryParse_WhenWaitForPidIsInvalid_ShouldFailValidation()
+    {
+        var parser = new ArgumentParser();
+
+        var result = parser.TryParse(new[] { "--self-update-apply", "--self-update-staging", "C:/temp/staging", "--target", "C:/temp/target", "--wait-for-pid", "abc" });
+
+        result.Success.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.Contains("wait-for-pid", StringComparison.OrdinalIgnoreCase));
     }
 }

@@ -724,6 +724,8 @@ namespace StorageWatch.Tests.UnitTests
                 store,
                 validator,
                 orchestrator,
+                new StubInstallPathResolver(root),
+                new FakeUserSessionLauncher(),
                 new TestLogger<UnifiedInstallResumeService>());
 
             await service.StartAsync(CancellationToken.None);
@@ -751,6 +753,8 @@ namespace StorageWatch.Tests.UnitTests
                 store,
                 validator,
                 orchestrator,
+                new StubInstallPathResolver(root),
+                new FakeUserSessionLauncher(),
                 new TestLogger<UnifiedInstallResumeService>());
 
             await service.StartAsync(CancellationToken.None);
@@ -783,6 +787,8 @@ namespace StorageWatch.Tests.UnitTests
                 store,
                 validator,
                 orchestrator,
+                new StubInstallPathResolver(root),
+                new FakeUserSessionLauncher(),
                 new TestLogger<UnifiedInstallResumeService>());
 
             await service.StartAsync(CancellationToken.None);
@@ -814,6 +820,85 @@ namespace StorageWatch.Tests.UnitTests
                 store,
                 validator,
                 orchestrator,
+                new StubInstallPathResolver(root),
+                new FakeUserSessionLauncher(),
+                new TestLogger<UnifiedInstallResumeService>());
+
+            await service.StartAsync(CancellationToken.None);
+
+            orchestrator.ResumeCallCount.Should().Be(0);
+            (await store.CheckpointExistsAsync()).Should().BeFalse();
+        }
+
+        [Fact]
+        public async Task UnifiedInstallResumeService_PreservesCheckpoint_WhenUiRestartIntentPendingAndNoInteractiveSession()
+        {
+            var root = TestHelpers.CreateTempDirectory();
+            _ = CreateVersionedInstallLayout(root);
+
+            var checkpoint = new UnifiedInstallCheckpoint
+            {
+                OrchestrationId = Guid.NewGuid().ToString("N"),
+                StartedAtUtc = DateTimeOffset.UtcNow,
+                LastUpdatedAtUtc = DateTimeOffset.UtcNow,
+                IsInstalling = false,
+                RestartUIRequested = true,
+                RestartServerRequested = false
+            };
+
+            var store = new InMemoryCheckpointStore();
+            await store.SaveCheckpointAsync(checkpoint, CancellationToken.None);
+
+            var validator = new UnifiedInstallCheckpointValidator(
+                new StubInstallPathResolver(root),
+                new TestLogger<UnifiedInstallCheckpointValidator>());
+            var orchestrator = new RecordingUnifiedInstallOrchestrator();
+            var service = new UnifiedInstallResumeService(
+                store,
+                validator,
+                orchestrator,
+                new StubInstallPathResolver(root),
+                new FakeUserSessionLauncher(shouldSucceed: false, sessionId: null),
+                new TestLogger<UnifiedInstallResumeService>());
+
+            await service.StartAsync(CancellationToken.None);
+
+            orchestrator.ResumeCallCount.Should().Be(0);
+            (await store.CheckpointExistsAsync()).Should().BeTrue();
+            var saved = await store.LoadCheckpointAsync(CancellationToken.None);
+            saved.Should().NotBeNull();
+            saved!.RestartUIRequested.Should().BeTrue();
+        }
+
+        [Fact]
+        public async Task UnifiedInstallResumeService_ClearsCheckpoint_WhenUiRestartIntentCompletes()
+        {
+            var root = TestHelpers.CreateTempDirectory();
+            _ = CreateVersionedInstallLayout(root);
+
+            var checkpoint = new UnifiedInstallCheckpoint
+            {
+                OrchestrationId = Guid.NewGuid().ToString("N"),
+                StartedAtUtc = DateTimeOffset.UtcNow,
+                LastUpdatedAtUtc = DateTimeOffset.UtcNow,
+                IsInstalling = false,
+                RestartUIRequested = true,
+                RestartServerRequested = false
+            };
+
+            var store = new InMemoryCheckpointStore();
+            await store.SaveCheckpointAsync(checkpoint, CancellationToken.None);
+
+            var validator = new UnifiedInstallCheckpointValidator(
+                new StubInstallPathResolver(root),
+                new TestLogger<UnifiedInstallCheckpointValidator>());
+            var orchestrator = new RecordingUnifiedInstallOrchestrator();
+            var service = new UnifiedInstallResumeService(
+                store,
+                validator,
+                orchestrator,
+                new StubInstallPathResolver(root),
+                new FakeUserSessionLauncher(shouldSucceed: true, sessionId: 1),
                 new TestLogger<UnifiedInstallResumeService>());
 
             await service.StartAsync(CancellationToken.None);
@@ -839,6 +924,24 @@ namespace StorageWatch.Tests.UnitTests
             var result = await downloader.DownloadAsync(component, CancellationToken.None);
 
             result.Success.Should().BeFalse();
+        }
+
+        private sealed class FakeUserSessionLauncher : IUserSessionLauncher
+        {
+            private readonly bool _shouldSucceed;
+            private readonly int? _sessionId;
+
+            public FakeUserSessionLauncher(bool shouldSucceed = false, int? sessionId = null)
+            {
+                _shouldSucceed = shouldSucceed;
+                _sessionId = sessionId;
+            }
+
+            public bool TryRestartUI(string uiExecutablePath, out int? sessionId)
+            {
+                sessionId = _sessionId;
+                return _shouldSucceed;
+            }
         }
 
         private static UnifiedInstallCheckpoint CreateCheckpoint(string component, ComponentInstallState state, string targetVersion, DateTimeOffset lastUpdatedAtUtc, bool includeZip)

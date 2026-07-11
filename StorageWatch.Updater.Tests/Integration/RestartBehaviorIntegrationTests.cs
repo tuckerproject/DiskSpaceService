@@ -13,7 +13,7 @@ public class RestartBehaviorIntegrationTests : IDisposable
 
     [Fact]
     [Trait("Category", "Integration")]
-    public void UIRestartHelper_WhenLauncherSucceeds_ShouldReturnTrueAndCaptureIntent()
+    public void UIRestartHelper_WhenLauncherSucceeds_ShouldReturnTrueAndCaptureLaunchAttempt()
     {
         var launcher = new FakeProcessLauncher();
         var helper = new UIRestartHelper(launcher);
@@ -28,18 +28,13 @@ public class RestartBehaviorIntegrationTests : IDisposable
 
     [Fact]
     [Trait("Category", "Integration")]
-    public void ServerRestartHelper_WhenLauncherFails_ShouldReturnFalseAndCaptureIntent()
+    public void ServerRestartHelper_WhenServiceNameMissing_ShouldReturnFalse()
     {
-        var launcher = new FakeProcessLauncher();
-        launcher.EnqueueResult(false);
-        var helper = new ServerRestartHelper(launcher);
-        var serverPath = _temp.CreateFile("server/StorageWatchServer.exe", string.Empty);
+        var helper = new ServerRestartHelper();
 
-        var result = helper.TryRestartServer(serverPath);
+        var result = helper.TryRestartServer(string.Empty);
 
         result.Should().BeFalse();
-        launcher.StartedProcesses.Should().ContainSingle();
-        launcher.StartedProcesses[0].FileName.Should().Be(serverPath);
     }
 
     [Fact]

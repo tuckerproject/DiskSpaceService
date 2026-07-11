@@ -22,6 +22,61 @@ void LogComplete()
     logger.Log($"[COMPLETE] Updater finished. Updated={updatedCount}, Skipped={skippedCount}");
 }
 
+bool TryPersistRestartIntent(bool restartUiRequested, bool restartServerRequested)
+{
+    if (!restartUiRequested && !restartServerRequested)
+    {
+        logger.Log("[DIAG] Restart intent persistence skipped because no restart flags were requested.");
+        return true;
+    }
+
+    try
+    {
+        var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+        var checkpointPath = Path.Combine(programData, "StorageWatch", "Update", "install-plan.json");
+        if (!File.Exists(checkpointPath))
+        {
+            logger.Log($"[WARN] Restart intent was requested but checkpoint file was not found: {checkpointPath}");
+            return false;
+        }
+
+        var json = File.ReadAllText(checkpointPath);
+        var node = JsonNode.Parse(json) as JsonObject;
+        if (node == null)
+        {
+            logger.Log("[WARN] Restart intent was requested but checkpoint JSON was invalid.");
+            return false;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (restartUiRequested)
+        {
+            node["restartUIRequested"] = true;
+            logger.Log("[UI-RESTART] Restart requested; recorded restartUIRequested=true in checkpoint.");
+        }
+
+        if (restartServerRequested)
+        {
+            node["restartServerRequested"] = true;
+            logger.Log("[SERVER-RESTART] Restart requested; recorded restartServerRequested=true in checkpoint.");
+        }
+
+        node["lastUpdatedAtUtc"] = now.ToString("O");
+
+        var output = node.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        var tempPath = checkpointPath + ".tmp";
+        File.WriteAllText(tempPath, output);
+        File.Move(tempPath, checkpointPath, overwrite: true);
+        logger.Log($"[STEP] Persisted restart intent to checkpoint: {checkpointPath}");
+        return true;
+    }
+    catch (Exception ex)
+    {
+        logger.Log($"[WARN] Failed to persist restart intent: {ex.Message}");
+        return false;
+    }
+}
+
 bool TryPersistAgentHandoffComplete()
 {
     try
@@ -75,6 +130,7 @@ try
     logger.Log($"[PARSED] RestartUI: {arguments.RestartUI}");
     logger.Log($"[PARSED] RestartAgent: {arguments.RestartAgent}");
     logger.Log($"[PARSED] RestartServer: {arguments.RestartServer}");
+    logger.Log($"[PARSED] AllowSystemRestartIntent: {arguments.AllowSystemRestartIntent}");
     logger.Log($"[PARSED] ManifestPath: {arguments.ManifestPath}");
     logger.Log($"[PARSED] SourcePath: {arguments.SourcePath}");
     logger.Log($"[PARSED] TargetPath: {arguments.TargetPath}");
@@ -100,6 +156,11 @@ try
         if (selfUpdateStaged)
         {
             updatedCount++;
+            logger.Log("[SELF-UPDATE] Self-update handoff complete; exiting old updater process to release file locks.");
+            logger.Log("[SELF-UPDATE] Stage mode completed.");
+            LogComplete();
+            Console.WriteLine("Updater exiting.");
+            Environment.Exit(ExitCodes.Success);
         }
         else
         {
@@ -151,9 +212,15 @@ try
                 if (selfUpdateManager.IsUpdateAvailable(manifest.Updater))
                 {
                     logger.Log("[SELF-UPDATE] Updater update available. Initiating self-update...");
-                    await selfUpdateManager.RunLegacySelfUpdateStageAsync(manifest.Updater, arguments);
-                    updatedCount++;
-                    // Process exits in UpdateSelfAsync if successful
+                    var selfUpdateStaged = await selfUpdateManager.RunLegacySelfUpdateStageAsync(manifest.Updater, arguments);
+                    if (selfUpdateStaged)
+                    {
+                        updatedCount++;
+                        logger.Log("[SELF-UPDATE] Self-update handoff complete; exiting old updater process to release file locks.");
+                        LogComplete();
+                        Console.WriteLine("Updater exiting.");
+                        Environment.Exit(ExitCodes.Success);
+                    }
                 }
                 else
                 {
@@ -213,11 +280,19 @@ try
         logger.Log("[STEP] File replacement succeeded for UI.");
         Console.WriteLine("File replacement succeeded.");
 
-        var uiExecutablePath = Path.Combine(arguments.TargetPath, "StorageWatchUI.exe");
-        logger.Log($"[STEP] UI restart begins. UI executable path: {uiExecutablePath}");
-        var uiRestartHelper = new UIRestartHelper(diagnosticLogger: logger.Log);
-        uiRestartHelper.TryRestartUI(uiExecutablePath);
-        logger.Log("[STEP] UI restart completed.");
+        if (arguments.RestartUI)
+        {
+            logger.Log("[UI-RESTART] Restart requested after UI update; direct process launch is suppressed in updater.");
+            logger.Log($"[UI-RESTART] Suppression context: User={Environment.UserName}, IsWindows={OperatingSystem.IsWindows()}");
+            if (!TryPersistRestartIntent(restartUiRequested: true, restartServerRequested: false))
+            {
+                logger.Log("[WARN] UI restart intent could not be recorded to checkpoint.");
+            }
+        }
+        else
+        {
+            logger.Log("[DIAG] UI restart not requested for this updater invocation.");
+        }
 
         logger.Log("[SUCCESS] UI update completed successfully.");
         updatedCount++;
@@ -356,11 +431,19 @@ try
         logger.Log("[STEP] File replacement succeeded for Server.");
         Console.WriteLine("File replacement succeeded.");
 
-        var serverExecutablePath = Path.Combine(arguments.TargetPath, "StorageWatchServer.exe");
-        logger.Log($"[STEP] Server restart begins. Server executable path: {serverExecutablePath}");
-        var serverRestartHelper = new ServerRestartHelper(diagnosticLogger: logger.Log);
-        serverRestartHelper.TryRestartServer(serverExecutablePath);
-        logger.Log("[STEP] Server restart completed.");
+        if (arguments.RestartServer)
+        {
+            logger.Log("[SERVER-RESTART] Restart requested after server update; direct process launch is suppressed in updater.");
+            logger.Log($"[SERVER-RESTART] Suppression context: User={Environment.UserName}, IsWindows={OperatingSystem.IsWindows()}");
+            if (!TryPersistRestartIntent(restartUiRequested: false, restartServerRequested: true))
+            {
+                logger.Log("[WARN] Server restart intent could not be recorded to checkpoint.");
+            }
+        }
+        else
+        {
+            logger.Log("[DIAG] Server restart not requested for this updater invocation.");
+        }
 
         logger.Log("[SUCCESS] Server update completed successfully.");
         updatedCount++;

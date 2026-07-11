@@ -51,7 +51,7 @@ public interface IUnifiedInstallCheckpointValidator
 
 public sealed class UnifiedInstallCheckpointValidator : IUnifiedInstallCheckpointValidator
 {
-    private const int CurrentCheckpointSchemaVersion = 2;
+    private const int CurrentCheckpointSchemaVersion = 3;
     private static readonly TimeSpan HandoffCompletionFreshness = TimeSpan.FromHours(1);
     private static readonly TimeSpan HandoffInProgressGrace = TimeSpan.FromSeconds(30);
     private const int MaxResumeAttempts = 3;

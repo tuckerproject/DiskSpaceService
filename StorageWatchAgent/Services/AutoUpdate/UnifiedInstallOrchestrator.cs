@@ -1066,6 +1066,11 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
         if (!string.IsNullOrWhiteSpace(restartFlag))
         {
             args.Add(restartFlag);
+            if (string.Equals(restartFlag, "--restart-ui", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(restartFlag, "--restart-server", StringComparison.OrdinalIgnoreCase))
+            {
+                args.Add("--allow-system-restart-intent");
+            }
         }
 
         return args;

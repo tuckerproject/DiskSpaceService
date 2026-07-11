@@ -17,6 +17,8 @@ internal class SelfUpdateManager
 {
     private const int ReplaceRetryCount = 15;
     private const int ReplaceRetryDelayMs = 500;
+    private const int ParentExitPollDelayMs = 200;
+    private const int ParentExitWaitTimeoutMs = 30000;
 
     private readonly string _currentUpdaterFolder;
     private readonly string _updaterExePath;
@@ -147,12 +149,14 @@ internal class SelfUpdateManager
             var continueArgs = BuildContinuationArguments(currentArguments);
             var encodedContinuation = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(continueArgs)));
             LogDiag($"Continuation args prepared. Count={continueArgs.Length}, EncodedLength={encodedContinuation.Length}");
+            var currentProcessId = Environment.ProcessId;
 
             var applyArgs = new[]
             {
                 "--self-update-apply",
                 "--self-update-staging", stagingFolder,
                 "--target", _currentUpdaterFolder,
+                "--wait-for-pid", currentProcessId.ToString(),
                 "--continue-args", encodedContinuation
             };
             LogDiag($"Launching self-update apply. Args={string.Join(" ", applyArgs)}");
@@ -168,6 +172,7 @@ internal class SelfUpdateManager
                     "--self-update-apply",
                     "--self-update-staging", stagingFolder,
                     "--target", _currentUpdaterFolder,
+                    "--wait-for-pid", currentProcessId.ToString(),
                     "--continue-args", encodedContinuation
                 }
             });
@@ -199,11 +204,30 @@ internal class SelfUpdateManager
 
         var stagingFolder = Path.GetFullPath(arguments.SelfUpdateStagingPath);
         var targetFolder = Path.GetFullPath(arguments.TargetPath);
-        LogDiag($"RunSelfUpdateApplyAsync start. StagingFolder={stagingFolder}, TargetFolder={targetFolder}, ContinueArgsPresent={!string.IsNullOrWhiteSpace(arguments.ContinueArguments)}");
+        LogDiag($"RunSelfUpdateApplyAsync start. StagingFolder={stagingFolder}, TargetFolder={targetFolder}, WaitForPid={arguments.WaitForPid?.ToString() ?? "<none>"}, ContinueArgsPresent={!string.IsNullOrWhiteSpace(arguments.ContinueArguments)}");
 
         if (!Directory.Exists(stagingFolder))
             throw new DirectoryNotFoundException($"Self-update staging folder not found: {stagingFolder}");
 
+        if (arguments.WaitForPid is int parentPid)
+        {
+            try
+            {
+                WaitForProcessExit(parentPid, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                LogDiag($"Parent wait canceled before replacement. ProcessId={parentPid}");
+                throw;
+            }
+            catch (TimeoutException ex)
+            {
+                LogDiag($"Parent wait timed out before replacement. ProcessId={parentPid}, Message={ex.Message}");
+                throw;
+            }
+        }
+
+        LogDiag("Starting target replacement with retry fallback for transient non-parent locks.");
         ReplaceTargetFolderWithRetries(stagingFolder, targetFolder, cancellationToken, _sleepAction);
         LogDiag($"Self-update apply replacement complete. Source={stagingFolder}, Target={targetFolder}");
 
@@ -240,17 +264,17 @@ internal class SelfUpdateManager
     {
         if (currentArguments.UpdateUI)
         {
-            return BuildUpdateContinuationArguments("--update-ui", "--restart-ui", currentArguments);
+            return BuildUpdateContinuationArguments("--update-ui", "--restart-ui", currentArguments.RestartUI, currentArguments);
         }
 
         if (currentArguments.UpdateAgent)
         {
-            return BuildUpdateContinuationArguments("--update-agent", "--restart-agent", currentArguments);
+            return BuildUpdateContinuationArguments("--update-agent", "--restart-agent", currentArguments.RestartAgent, currentArguments);
         }
 
         if (currentArguments.UpdateServer)
         {
-            return BuildUpdateContinuationArguments("--update-server", "--restart-server", currentArguments);
+            return BuildUpdateContinuationArguments("--update-server", "--restart-server", currentArguments.RestartServer, currentArguments);
         }
 
         if (currentArguments.RestartUI)
@@ -268,6 +292,7 @@ internal class SelfUpdateManager
     private static string[] BuildUpdateContinuationArguments(
         string updateFlag,
         string restartFlag,
+        bool restartRequested,
         UpdaterArguments currentArguments)
     {
         var args = new List<string> { updateFlag };
@@ -290,7 +315,17 @@ internal class SelfUpdateManager
             args.Add(currentArguments.ManifestPath);
         }
 
-        args.Add(restartFlag);
+        if (restartRequested)
+        {
+            args.Add(restartFlag);
+
+            if (string.Equals(restartFlag, "--restart-ui", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(restartFlag, "--restart-server", StringComparison.OrdinalIgnoreCase))
+            {
+                args.Add("--allow-system-restart-intent");
+            }
+        }
+
         return args.ToArray();
     }
 
@@ -346,6 +381,45 @@ internal class SelfUpdateManager
                 Directory.CreateDirectory(destinationSubDir);
 
             File.Copy(file, destinationFile, overwrite: true);
+        }
+    }
+
+    private void WaitForProcessExit(int processId, CancellationToken cancellationToken)
+    {
+        LogDiag($"Waiting for parent updater process to exit. ProcessId={processId}, TimeoutMs={ParentExitWaitTimeoutMs}");
+        var elapsedMs = 0;
+
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (process.HasExited)
+                {
+                    LogDiag($"Parent updater process exited. ProcessId={processId}, WaitedMs={elapsedMs}");
+                    return;
+                }
+
+                if (elapsedMs >= ParentExitWaitTimeoutMs)
+                {
+                    throw new TimeoutException($"Timed out waiting for parent updater process {processId} to exit.");
+                }
+
+                _sleepAction(ParentExitPollDelayMs);
+                elapsedMs += ParentExitPollDelayMs;
+                process.Refresh();
+            }
+        }
+        catch (ArgumentException)
+        {
+            LogDiag($"Parent updater process already exited before wait started. ProcessId={processId}");
+        }
+        catch (InvalidOperationException)
+        {
+            LogDiag($"Parent updater process became unavailable during wait; treating as exited. ProcessId={processId}");
         }
     }
 

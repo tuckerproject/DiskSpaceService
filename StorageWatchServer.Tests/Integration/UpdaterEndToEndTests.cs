@@ -42,13 +42,15 @@ namespace StorageWatchServer.Tests.Integration
             var systemExe = Path.Combine(Environment.SystemDirectory, "whoami.exe");
             File.Copy(systemExe, Path.Combine(installDir, "StorageWatchUI.exe"), overwrite: true);
 
+            ResetCheckpointRestartFlags();
+
             var result = RunUpdater(updaterExe, $"--update-ui --source \"{stagingDir}\" --target \"{installDir}\" --manifest \"{manifestPath}\" --restart-ui");
 
             Assert.Equal(0, result.ExitCode);
             Assert.Equal("ui-v2", File.ReadAllText(installPayloadPath));
             Assert.Contains("File replacement begins.", result.Output, StringComparison.Ordinal);
             Assert.Contains("File replacement succeeded.", result.Output, StringComparison.Ordinal);
-            Assert.Contains("UI relaunch begins.", result.Output, StringComparison.Ordinal);
+            Assert.True(ReadRestartUIRequested());
             Assert.Contains("Updater exiting.", result.Output, StringComparison.Ordinal);
         }
 
@@ -126,13 +128,15 @@ namespace StorageWatchServer.Tests.Integration
             var systemExe = Path.Combine(Environment.SystemDirectory, "whoami.exe");
             File.Copy(systemExe, Path.Combine(installDir, "StorageWatchServer.exe"), overwrite: true);
 
+            ResetCheckpointRestartFlags();
+
             var result = RunUpdater(updaterExe, $"--update-server --source \"{stagingDir}\" --target \"{installDir}\" --manifest \"{manifestPath}\" --restart-server");
 
             Assert.Equal(0, result.ExitCode);
             Assert.Equal("server-v2", File.ReadAllText(installPayloadPath));
             Assert.Contains("File replacement begins.", result.Output, StringComparison.Ordinal);
             Assert.Contains("File replacement succeeded.", result.Output, StringComparison.Ordinal);
-            Assert.Contains("Server restart begins.", result.Output, StringComparison.Ordinal);
+            Assert.True(ReadRestartServerRequested());
             Assert.Contains("Updater exiting.", result.Output, StringComparison.Ordinal);
         }
 
@@ -142,6 +146,8 @@ namespace StorageWatchServer.Tests.Integration
             var updaterExe = EnsureUpdaterExePath();
             var testRoot = CreateTempDirectory();
 
+            ResetCheckpointRestartFlags();
+
             var uiResult = RunScenario(updaterExe, testRoot, "ui", "StorageWatchUI.exe");
             var agentResult = RunScenario(updaterExe, testRoot, "agent", null);
             var serverResult = RunScenario(updaterExe, testRoot, "server", "StorageWatchServer.exe");
@@ -150,6 +156,8 @@ namespace StorageWatchServer.Tests.Integration
             Assert.NotEqual(0, agentResult.ExitCode);
             Assert.Contains("Agent stop failed.", agentResult.Output, StringComparison.Ordinal);
             Assert.Equal(0, serverResult.ExitCode);
+            Assert.True(ReadRestartUIRequested());
+            Assert.True(ReadRestartServerRequested());
         }
 
         [Fact]
@@ -589,6 +597,50 @@ namespace StorageWatchServer.Tests.Integration
             var path = Path.Combine(Path.GetTempPath(), "StorageWatchUpdaterE2ETests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(path);
             return path;
+        }
+
+        private static string GetInstallCheckpointPath()
+        {
+            var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+            return Path.Combine(programData, "StorageWatch", "Update", "install-plan.json");
+        }
+
+        private static void ResetCheckpointRestartFlags()
+        {
+            var checkpointPath = GetInstallCheckpointPath();
+            Directory.CreateDirectory(Path.GetDirectoryName(checkpointPath)!);
+
+            File.WriteAllText(checkpointPath,
+                "{\n" +
+                "  \"schemaVersion\": 3,\n" +
+                "  \"orchestrationId\": \"e2e-test\",\n" +
+                "  \"startedAtUtc\": \"2026-01-01T00:00:00.0000000+00:00\",\n" +
+                "  \"lastUpdatedAtUtc\": \"2026-01-01T00:00:00.0000000+00:00\",\n" +
+                "  \"isInstalling\": false,\n" +
+                "  \"components\": [],\n" +
+                "  \"currentComponentIndex\": 0,\n" +
+                "  \"componentStates\": [],\n" +
+                "  \"restartUIRequested\": false,\n" +
+                "  \"restartServerRequested\": false\n" +
+                "}");
+        }
+
+        private static bool ReadRestartUIRequested()
+        {
+            return ReadCheckpointFlag("restartUIRequested");
+        }
+
+        private static bool ReadRestartServerRequested()
+        {
+            return ReadCheckpointFlag("restartServerRequested");
+        }
+
+        private static bool ReadCheckpointFlag(string propertyName)
+        {
+            var checkpointPath = GetInstallCheckpointPath();
+            var json = File.ReadAllText(checkpointPath);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty(propertyName, out var value) && value.GetBoolean();
         }
 
         private static (bool Success, bool IsPartialRecovery, string Message) ExecuteRollback(string updaterExe, string backupDir, string targetDir, string reason)

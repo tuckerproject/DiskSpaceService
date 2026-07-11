@@ -8,7 +8,7 @@ public class UnifiedInstallCheckpoint
     /// <summary>
     /// Schema version for persisted checkpoint compatibility.
     /// </summary>
-    public int SchemaVersion { get; set; } = 2;
+    public int SchemaVersion { get; set; } = 3;
 
     /// <summary>
     /// Unique identifier for this orchestration instance.
@@ -89,6 +89,16 @@ public class UnifiedInstallCheckpoint
     /// Number of startup resume attempts for loop prevention.
     /// </summary>
     public int ResumeAttemptCount { get; set; }
+
+    /// <summary>
+    /// Indicates that a UI restart was requested by the updater flow.
+    /// </summary>
+    public bool RestartUIRequested { get; set; }
+
+    /// <summary>
+    /// Indicates that a server restart was requested by the updater flow.
+    /// </summary>
+    public bool RestartServerRequested { get; set; }
 }
 
 public enum AgentHandoffState

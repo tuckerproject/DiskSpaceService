@@ -13,12 +13,19 @@ public class ContinuationArgumentsTests
             UpdateUI = true,
             SourcePath = "C:/temp/source",
             TargetPath = "C:/temp/target",
-            ManifestPath = "C:/temp/manifest.json"
+            ManifestPath = "C:/temp/manifest.json",
+            RestartUI = true
         };
 
         var continuation = SelfUpdateManager.BuildContinuationArguments(args);
 
-        continuation.Should().ContainInOrder("--update-ui", "--source", "C:/temp/source", "--target", "C:/temp/target", "--manifest", "C:/temp/manifest.json", "--restart-ui");
+        continuation.Should().ContainInOrder(
+            "--update-ui",
+            "--source", "C:/temp/source",
+            "--target", "C:/temp/target",
+            "--manifest", "C:/temp/manifest.json",
+            "--restart-ui",
+            "--allow-system-restart-intent");
     }
 
     [Fact]

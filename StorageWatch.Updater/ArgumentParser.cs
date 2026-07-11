@@ -1,3 +1,5 @@
+using System.Security.Principal;
+
 namespace StorageWatch.Updater;
 
 /// <summary>
@@ -13,11 +15,13 @@ internal class UpdaterArguments
     public bool RestartUI { get; set; }
     public bool RestartAgent { get; set; }
     public bool RestartServer { get; set; }
+    public bool AllowSystemRestartIntent { get; set; }
     public string? ManifestPath { get; set; }
     public string? SourcePath { get; set; }
     public string? TargetPath { get; set; }
     public string? SelfUpdateStagingPath { get; set; }
     public string? ContinueArguments { get; set; }
+    public int? WaitForPid { get; set; }
 }
 
 /// <summary>
@@ -134,6 +138,11 @@ internal class ArgumentParser
                         LogDiag("Flag parsed: --restart-server=true");
                         break;
 
+                    case "--allow-system-restart-intent":
+                        arguments.AllowSystemRestartIntent = true;
+                        LogDiag("Flag parsed: --allow-system-restart-intent=true");
+                        break;
+
                     case "--manifest":
                         if (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
                         {
@@ -170,6 +179,28 @@ internal class ArgumentParser
                         {
                             errors.Add("Error: --continue-args flag requires an argument string.");
                             LogDiag("Validation failed: --continue-args missing value");
+                        }
+                        break;
+
+                    case "--wait-for-pid":
+                        if (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                        {
+                            var pidRaw = args[++i];
+                            if (int.TryParse(pidRaw, out var pid) && pid > 0)
+                            {
+                                arguments.WaitForPid = pid;
+                                LogDiag($"Value parsed: --wait-for-pid={arguments.WaitForPid}");
+                            }
+                            else
+                            {
+                                errors.Add("Error: --wait-for-pid flag requires a positive integer process id.");
+                                LogDiag($"Validation failed: --wait-for-pid invalid value '{pidRaw}'");
+                            }
+                        }
+                        else
+                        {
+                            errors.Add("Error: --wait-for-pid flag requires a process id argument.");
+                            LogDiag("Validation failed: --wait-for-pid missing value");
                         }
                         break;
 
@@ -231,6 +262,13 @@ internal class ArgumentParser
             {
                 errors.Add("Error: Only one component update flag may be specified per updater run (--update-ui, --update-agent, or --update-server).");
                 LogDiag($"Validation failed: multiple component update flags set (count={componentUpdateFlagCount})");
+            }
+
+            var runningAsSystem = IsRunningAsSystem();
+            if ((arguments.RestartUI || arguments.RestartServer) && runningAsSystem && !arguments.AllowSystemRestartIntent)
+            {
+                errors.Add("Error: --restart-ui and --restart-server require --allow-system-restart-intent when updater runs as SYSTEM.");
+                LogDiag("Validation failed: restart-ui/restart-server requested under SYSTEM without --allow-system-restart-intent");
             }
 
             // Set result
@@ -301,10 +339,29 @@ internal class ArgumentParser
         Console.WriteLine("  --restart-ui             Restart the UI component after update");
         Console.WriteLine("  --restart-agent          Restart the Agent component after update");
         Console.WriteLine("  --restart-server         Restart the Server component after update");
+        Console.WriteLine("  --allow-system-restart-intent Allow restart intent flags under SYSTEM for unified update flow");
         Console.WriteLine("  --manifest <path>        Path to the update manifest file");
         Console.WriteLine("  --source <path>          Path to the source directory containing update files");
         Console.WriteLine("  --target <path>          Path to the target installation directory");
         Console.WriteLine("  --self-update-staging <path> Path to extracted updater staging folder");
         Console.WriteLine("  --continue-args <text>   Serialized arguments for post-self-update continuation");
+        Console.WriteLine("  --wait-for-pid <pid>     Wait for specified process id to exit before apply");
+    }
+
+    private static bool IsRunningAsSystem()
+    {
+        try
+        {
+            if (!OperatingSystem.IsWindows())
+                return false;
+
+            var identity = WindowsIdentity.GetCurrent();
+            return string.Equals(identity?.Name, @"NT AUTHORITY\SYSTEM", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(Environment.UserName, "SYSTEM", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
