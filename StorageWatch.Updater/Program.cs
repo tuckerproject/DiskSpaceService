@@ -99,7 +99,7 @@ bool TryPersistAgentHandoffComplete()
 
         var now = DateTimeOffset.UtcNow;
         node["handoffCompletedAtUtc"] = now.ToString("O");
-        node["handoffState"] = "Completed";
+        node["handoffState"] = 3;
         node["lastUpdatedAtUtc"] = now.ToString("O");
 
         var output = node.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
