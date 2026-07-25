@@ -720,13 +720,7 @@ namespace StorageWatch.Tests.UnitTests
                 new StubInstallPathResolver(root),
                 new TestLogger<UnifiedInstallCheckpointValidator>());
             var orchestrator = new RecordingUnifiedInstallOrchestrator();
-            var service = new UnifiedInstallResumeService(
-                store,
-                validator,
-                orchestrator,
-                new StubInstallPathResolver(root),
-                new FakeUserSessionLauncher(),
-                new TestLogger<UnifiedInstallResumeService>());
+            var service = CreateResumeService(store, validator, orchestrator, root, new FakeUserSessionLauncher());
 
             await service.StartAsync(CancellationToken.None);
 
@@ -749,13 +743,7 @@ namespace StorageWatch.Tests.UnitTests
                 new StubInstallPathResolver(root),
                 new TestLogger<UnifiedInstallCheckpointValidator>());
             var orchestrator = new RecordingUnifiedInstallOrchestrator();
-            var service = new UnifiedInstallResumeService(
-                store,
-                validator,
-                orchestrator,
-                new StubInstallPathResolver(root),
-                new FakeUserSessionLauncher(),
-                new TestLogger<UnifiedInstallResumeService>());
+            var service = CreateResumeService(store, validator, orchestrator, root, new FakeUserSessionLauncher());
 
             await service.StartAsync(CancellationToken.None);
             await orchestrator.ResumeCalled.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -783,13 +771,7 @@ namespace StorageWatch.Tests.UnitTests
                 new StubInstallPathResolver(root),
                 new TestLogger<UnifiedInstallCheckpointValidator>());
             var orchestrator = new RecordingUnifiedInstallOrchestrator();
-            var service = new UnifiedInstallResumeService(
-                store,
-                validator,
-                orchestrator,
-                new StubInstallPathResolver(root),
-                new FakeUserSessionLauncher(),
-                new TestLogger<UnifiedInstallResumeService>());
+            var service = CreateResumeService(store, validator, orchestrator, root, new FakeUserSessionLauncher());
 
             await service.StartAsync(CancellationToken.None);
 
@@ -816,13 +798,7 @@ namespace StorageWatch.Tests.UnitTests
                 new StubInstallPathResolver(root),
                 new TestLogger<UnifiedInstallCheckpointValidator>());
             var orchestrator = new RecordingUnifiedInstallOrchestrator();
-            var service = new UnifiedInstallResumeService(
-                store,
-                validator,
-                orchestrator,
-                new StubInstallPathResolver(root),
-                new FakeUserSessionLauncher(),
-                new TestLogger<UnifiedInstallResumeService>());
+            var service = CreateResumeService(store, validator, orchestrator, root, new FakeUserSessionLauncher());
 
             await service.StartAsync(CancellationToken.None);
 
@@ -853,13 +829,7 @@ namespace StorageWatch.Tests.UnitTests
                 new StubInstallPathResolver(root),
                 new TestLogger<UnifiedInstallCheckpointValidator>());
             var orchestrator = new RecordingUnifiedInstallOrchestrator();
-            var service = new UnifiedInstallResumeService(
-                store,
-                validator,
-                orchestrator,
-                new StubInstallPathResolver(root),
-                new FakeUserSessionLauncher(shouldSucceed: false, sessionId: null),
-                new TestLogger<UnifiedInstallResumeService>());
+            var service = CreateResumeService(store, validator, orchestrator, root, new FakeUserSessionLauncher(shouldSucceed: false, sessionId: null));
 
             await service.StartAsync(CancellationToken.None);
 
@@ -893,13 +863,7 @@ namespace StorageWatch.Tests.UnitTests
                 new StubInstallPathResolver(root),
                 new TestLogger<UnifiedInstallCheckpointValidator>());
             var orchestrator = new RecordingUnifiedInstallOrchestrator();
-            var service = new UnifiedInstallResumeService(
-                store,
-                validator,
-                orchestrator,
-                new StubInstallPathResolver(root),
-                new FakeUserSessionLauncher(shouldSucceed: true, sessionId: 1),
-                new TestLogger<UnifiedInstallResumeService>());
+            var service = CreateResumeService(store, validator, orchestrator, root, new FakeUserSessionLauncher(shouldSucceed: true, sessionId: 1));
 
             await service.StartAsync(CancellationToken.None);
 
@@ -997,6 +961,27 @@ namespace StorageWatch.Tests.UnitTests
         {
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
             File.Copy(sourceAssemblyPath, targetPath, overwrite: true);
+        }
+
+        private static UnifiedInstallResumeService CreateResumeService(
+            IUnifiedInstallCheckpointStore checkpointStore,
+            IUnifiedInstallCheckpointValidator checkpointValidator,
+            IUnifiedInstallOrchestrator orchestrator,
+            string root,
+            IUserSessionLauncher userSessionLauncher)
+        {
+            var restartIntentProcessor = new UpdateRestartIntentProcessor(
+                checkpointStore,
+                new StubInstallPathResolver(root),
+                userSessionLauncher,
+                new TestLogger<UpdateRestartIntentProcessor>());
+
+            return new UnifiedInstallResumeService(
+                checkpointStore,
+                checkpointValidator,
+                orchestrator,
+                restartIntentProcessor,
+                new TestLogger<UnifiedInstallResumeService>());
         }
 
         private sealed class RecordingUnifiedInstallOrchestrator : IUnifiedInstallOrchestrator

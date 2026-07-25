@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using StorageWatch.Services.AutoUpdate;
 using StorageWatchAgent.Services.AutoUpdate.Models;
 using System.Diagnostics;
@@ -23,7 +22,6 @@ public class UnifiedInstallResumeService : IHostedService
     private readonly IUpdateRestartIntentProcessor _restartIntentProcessor;
     private readonly ILogger<UnifiedInstallResumeService> _logger;
 
-    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
     public UnifiedInstallResumeService(
         IUnifiedInstallCheckpointStore checkpointStore,
         IUnifiedInstallCheckpointValidator checkpointValidator,
@@ -36,26 +34,6 @@ public class UnifiedInstallResumeService : IHostedService
         _orchestrator = orchestrator;
         _restartIntentProcessor = restartIntentProcessor;
         _logger = logger;
-    }
-
-    public UnifiedInstallResumeService(
-        IUnifiedInstallCheckpointStore checkpointStore,
-        IUnifiedInstallCheckpointValidator checkpointValidator,
-        IUnifiedInstallOrchestrator orchestrator,
-        IInstallPathResolver installPathResolver,
-        IUserSessionLauncher userSessionLauncher,
-        ILogger<UnifiedInstallResumeService> logger)
-        : this(
-            checkpointStore,
-            checkpointValidator,
-            orchestrator,
-            new UpdateRestartIntentProcessor(
-                checkpointStore,
-                installPathResolver,
-                userSessionLauncher,
-                NullLogger<UpdateRestartIntentProcessor>.Instance),
-            logger)
-    {
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)

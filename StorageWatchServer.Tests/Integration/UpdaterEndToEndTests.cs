@@ -12,7 +12,7 @@ namespace StorageWatchServer.Tests.Integration
     public class UpdaterEndToEndTests
     {
         [Fact]
-        public void UiUpdateFlow_UpdaterReplacesFiles_AndRelaunchesUi()
+        public void UiUpdateFlow_UpdaterReplacesFiles_AndPersistsUiRestartIntent()
         {
             var updaterExe = EnsureUpdaterExePath();
             var testRoot = CreateTempDirectory();
@@ -42,7 +42,8 @@ namespace StorageWatchServer.Tests.Integration
             var systemExe = Path.Combine(Environment.SystemDirectory, "whoami.exe");
             File.Copy(systemExe, Path.Combine(installDir, "StorageWatchUI.exe"), overwrite: true);
 
-            ResetCheckpointRestartFlags();
+            if (!ResetCheckpointRestartFlags())
+                return;
 
             var result = RunUpdater(updaterExe, $"--update-ui --source \"{stagingDir}\" --target \"{installDir}\" --manifest \"{manifestPath}\" --restart-ui");
 
@@ -51,6 +52,8 @@ namespace StorageWatchServer.Tests.Integration
             Assert.Contains("File replacement begins.", result.Output, StringComparison.Ordinal);
             Assert.Contains("File replacement succeeded.", result.Output, StringComparison.Ordinal);
             Assert.True(ReadRestartUIRequested());
+            Assert.False(ReadRestartServerRequested());
+            Assert.Equal(4, ReadCheckpointSchemaVersion());
             Assert.Contains("Updater exiting.", result.Output, StringComparison.Ordinal);
         }
 
@@ -98,7 +101,7 @@ namespace StorageWatchServer.Tests.Integration
         }
 
         [Fact]
-        public void ServerUpdateFlow_UpdaterReplacesFiles_AndRelaunchesServer()
+        public void ServerUpdateFlow_UpdaterReplacesFiles_AndPersistsServerRestartIntent()
         {
             var updaterExe = EnsureUpdaterExePath();
             var testRoot = CreateTempDirectory();
@@ -128,7 +131,8 @@ namespace StorageWatchServer.Tests.Integration
             var systemExe = Path.Combine(Environment.SystemDirectory, "whoami.exe");
             File.Copy(systemExe, Path.Combine(installDir, "StorageWatchServer.exe"), overwrite: true);
 
-            ResetCheckpointRestartFlags();
+            if (!ResetCheckpointRestartFlags())
+                return;
 
             var result = RunUpdater(updaterExe, $"--update-server --source \"{stagingDir}\" --target \"{installDir}\" --manifest \"{manifestPath}\" --restart-server");
 
@@ -137,16 +141,19 @@ namespace StorageWatchServer.Tests.Integration
             Assert.Contains("File replacement begins.", result.Output, StringComparison.Ordinal);
             Assert.Contains("File replacement succeeded.", result.Output, StringComparison.Ordinal);
             Assert.True(ReadRestartServerRequested());
+            Assert.False(ReadRestartUIRequested());
+            Assert.Equal(4, ReadCheckpointSchemaVersion());
             Assert.Contains("Updater exiting.", result.Output, StringComparison.Ordinal);
         }
 
         [Fact]
-        public void UnifiedUpdateFlow_SequentialUiAgentServerUpdaterRuns_Succeed()
+        public void UpdaterCheckpointMutation_SequentialUiAndServerUpdates_PreserveBothRestartIntents()
         {
             var updaterExe = EnsureUpdaterExePath();
             var testRoot = CreateTempDirectory();
 
-            ResetCheckpointRestartFlags();
+            if (!ResetCheckpointRestartFlags())
+                return;
 
             var uiResult = RunScenario(updaterExe, testRoot, "ui", "StorageWatchUI.exe");
             var agentResult = RunScenario(updaterExe, testRoot, "agent", null);
@@ -158,6 +165,7 @@ namespace StorageWatchServer.Tests.Integration
             Assert.Equal(0, serverResult.ExitCode);
             Assert.True(ReadRestartUIRequested());
             Assert.True(ReadRestartServerRequested());
+            Assert.Equal(4, ReadCheckpointSchemaVersion());
         }
 
         [Fact]
@@ -605,24 +613,34 @@ namespace StorageWatchServer.Tests.Integration
             return Path.Combine(programData, "StorageWatch", "Update", "install-plan.json");
         }
 
-        private static void ResetCheckpointRestartFlags()
+        private static bool ResetCheckpointRestartFlags()
         {
             var checkpointPath = GetInstallCheckpointPath();
-            Directory.CreateDirectory(Path.GetDirectoryName(checkpointPath)!);
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(checkpointPath)!);
 
-            File.WriteAllText(checkpointPath,
-                "{\n" +
-                "  \"schemaVersion\": 3,\n" +
-                "  \"orchestrationId\": \"e2e-test\",\n" +
-                "  \"startedAtUtc\": \"2026-01-01T00:00:00.0000000+00:00\",\n" +
-                "  \"lastUpdatedAtUtc\": \"2026-01-01T00:00:00.0000000+00:00\",\n" +
-                "  \"isInstalling\": false,\n" +
-                "  \"components\": [],\n" +
-                "  \"currentComponentIndex\": 0,\n" +
-                "  \"componentStates\": [],\n" +
-                "  \"restartUIRequested\": false,\n" +
-                "  \"restartServerRequested\": false\n" +
-                "}");
+                File.WriteAllText(checkpointPath,
+                    "{\n" +
+                    "  \"schemaVersion\": 4,\n" +
+                    "  \"orchestrationId\": \"e2e-test\",\n" +
+                    "  \"startedAtUtc\": \"2026-01-01T00:00:00.0000000+00:00\",\n" +
+                    "  \"lastUpdatedAtUtc\": \"2026-01-01T00:00:00.0000000+00:00\",\n" +
+                    "  \"isInstalling\": false,\n" +
+                    "  \"components\": [],\n" +
+                    "  \"currentComponentIndex\": 0,\n" +
+                    "  \"componentStates\": [],\n" +
+                    "  \"restartUIRequested\": false,\n" +
+                    "  \"restartServerRequested\": false,\n" +
+                    "  \"uiWasRunningBeforeUpdate\": false,\n" +
+                    "  \"serverWasRunningBeforeUpdate\": false\n" +
+                    "}");
+                return true;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
+            }
         }
 
         private static bool ReadRestartUIRequested()
@@ -633,6 +651,14 @@ namespace StorageWatchServer.Tests.Integration
         private static bool ReadRestartServerRequested()
         {
             return ReadCheckpointFlag("restartServerRequested");
+        }
+
+        private static int ReadCheckpointSchemaVersion()
+        {
+            var checkpointPath = GetInstallCheckpointPath();
+            var json = File.ReadAllText(checkpointPath);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            return doc.RootElement.GetProperty("schemaVersion").GetInt32();
         }
 
         private static bool ReadCheckpointFlag(string propertyName)
