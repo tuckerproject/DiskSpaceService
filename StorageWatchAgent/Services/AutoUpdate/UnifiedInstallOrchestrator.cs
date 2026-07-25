@@ -33,6 +33,7 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
     private readonly IServiceUpdateDownloader _serviceUpdateDownloader;
     private readonly IInstallPathResolver _installPathResolver;
     private readonly IUnifiedInstallCheckpointStore _checkpointStore;
+    private readonly IUpdateRestartIntentProcessor? _restartIntentProcessor;
     private readonly IHostApplicationLifetime _hostApplicationLifetime;
     private readonly ILogger<UnifiedInstallOrchestrator> _logger;
     private readonly Func<string, CancellationToken, Task<(bool Success, string? ErrorMessage)>>? _stopComponentBeforeUpdateOverride;
@@ -80,7 +81,8 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
         Func<string, IReadOnlyList<string>, string, (bool Success, string? ErrorMessage)>? runUpdaterProcess = null,
         Func<string, IReadOnlyList<string>, string, (bool Success, int? ProcessId, string? ErrorMessage)>? runUpdaterProcessDetached = null,
         Func<string, TimeSpan, (bool Success, string? ErrorMessage)>? stopWindowsService = null,
-        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
+        IUpdateRestartIntentProcessor? restartIntentProcessor = null)
         : this(
             unifiedUpdateChecker,
             serviceUpdateDownloader,
@@ -92,7 +94,8 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
             runUpdaterProcess,
             runUpdaterProcessDetached,
             stopWindowsService,
-            delayAsync)
+            delayAsync,
+            restartIntentProcessor)
     {
     }
 
@@ -107,12 +110,14 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
         Func<string, IReadOnlyList<string>, string, (bool Success, string? ErrorMessage)>? runUpdaterProcess = null,
         Func<string, IReadOnlyList<string>, string, (bool Success, int? ProcessId, string? ErrorMessage)>? runUpdaterProcessDetached = null,
         Func<string, TimeSpan, (bool Success, string? ErrorMessage)>? stopWindowsService = null,
-        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
+        IUpdateRestartIntentProcessor? restartIntentProcessor = null)
     {
         _unifiedUpdateChecker = unifiedUpdateChecker ?? throw new ArgumentNullException(nameof(unifiedUpdateChecker));
         _serviceUpdateDownloader = serviceUpdateDownloader ?? throw new ArgumentNullException(nameof(serviceUpdateDownloader));
         _installPathResolver = installPathResolver ?? throw new ArgumentNullException(nameof(installPathResolver));
         _checkpointStore = checkpointStore ?? throw new ArgumentNullException(nameof(checkpointStore));
+        _restartIntentProcessor = restartIntentProcessor;
         _hostApplicationLifetime = hostApplicationLifetime ?? throw new ArgumentNullException(nameof(hostApplicationLifetime));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _stopComponentBeforeUpdateOverride = stopComponentBeforeUpdate;
@@ -202,9 +207,12 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
 
             if (!handoffActive)
             {
-                // Clear checkpoint on completion when no detached handoff is pending.
-                checkpoint.IsInstalling = false;
-                await _checkpointStore.ClearCheckpointAsync(cancellationToken);
+                var restartIntentsPending = result.Success
+                    && await ProcessPostUpdateRestartIntentsAsync(checkpoint, cancellationToken);
+                if (!restartIntentsPending)
+                {
+                    await _checkpointStore.ClearCheckpointAsync(cancellationToken);
+                }
                 await _unifiedUpdateChecker.SetInstallingStateAsync(false, cancellationToken);
             }
 
@@ -322,9 +330,12 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
 
             if (!handoffActive)
             {
-                // Clear checkpoint after resume completes when detached handoff is not pending.
-                checkpoint.IsInstalling = false;
-                await _checkpointStore.ClearCheckpointAsync(cancellationToken);
+                var restartIntentsPending = result.Success
+                    && await ProcessPostUpdateRestartIntentsAsync(checkpoint, cancellationToken);
+                if (!restartIntentsPending)
+                {
+                    await _checkpointStore.ClearCheckpointAsync(cancellationToken);
+                }
                 await _unifiedUpdateChecker.SetInstallingStateAsync(false, cancellationToken);
             }
 
@@ -463,6 +474,8 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
                 await _checkpointStore.SaveCheckpointAsync(checkpoint, cancellationToken);
             }
 
+            await CapturePreUpdateRuntimeStateAsync(component, checkpoint, cancellationToken);
+
             // Prepare invocation
             var componentStatus = new UnifiedUpdateComponentStatus
             {
@@ -472,7 +485,7 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
                 Sha256 = componentState.Sha256
             };
 
-            var invocation = PrepareInvocation(component, componentStatus, localZipPath, paths);
+            var invocation = PrepareInvocation(component, componentStatus, localZipPath, paths, checkpoint);
             if (!invocation.Success)
             {
                 componentState.State = ComponentInstallState.Failed;
@@ -641,6 +654,18 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
         return checkpoint;
     }
 
+    private async Task<bool> ProcessPostUpdateRestartIntentsAsync(
+        UnifiedInstallCheckpoint checkpoint,
+        CancellationToken cancellationToken)
+    {
+        var persistedCheckpoint = await _checkpointStore.LoadCheckpointAsync(cancellationToken) ?? checkpoint;
+        persistedCheckpoint.IsInstalling = false;
+        await _checkpointStore.SaveCheckpointAsync(persistedCheckpoint, cancellationToken);
+
+        return _restartIntentProcessor != null
+            && await _restartIntentProcessor.ProcessAsync(persistedCheckpoint, cancellationToken);
+    }
+
     private List<string> BuildPlan(UnifiedInstallUpdateRequest request, UnifiedUpdateStatusInfo status)
     {
         var updateable = status.Components
@@ -714,6 +739,48 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
             "agent" => StopAgentAsync(cancellationToken),
             _ => Task.FromResult((true, (string?)null))
         };
+    }
+
+    private async Task CapturePreUpdateRuntimeStateAsync(
+        string component,
+        UnifiedInstallCheckpoint checkpoint,
+        CancellationToken cancellationToken)
+    {
+        if (string.Equals(component, "ui", StringComparison.OrdinalIgnoreCase))
+        {
+            checkpoint.UiWasRunningBeforeUpdate = Process.GetProcessesByName(UiProcessName)
+                .Any(process => !process.HasExited);
+            await _checkpointStore.SaveCheckpointAsync(checkpoint, cancellationToken);
+            return;
+        }
+
+        if (!string.Equals(component, "server", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var serviceStatusAvailable = false;
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                using var service = new ServiceController(ServerServiceName);
+                checkpoint.ServerWasRunningBeforeUpdate = service.Status == ServiceControllerStatus.Running;
+                serviceStatusAvailable = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[ORCH] Unable to query Server service status; falling back to process detection.");
+        }
+
+        if (!serviceStatusAvailable)
+        {
+            checkpoint.ServerWasRunningBeforeUpdate = Process.GetProcessesByName(ServerProcessName)
+                .Any(process => !process.HasExited);
+        }
+
+        await _checkpointStore.SaveCheckpointAsync(checkpoint, cancellationToken);
     }
 
     private async Task<(bool Success, string? ErrorMessage)> StopUiAsync(CancellationToken cancellationToken)
@@ -934,7 +1001,12 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
         };
     }
 
-    private static (bool Success, string UpdaterPath, string WorkingDirectory, List<string> Arguments, string? Error) PrepareInvocation(string component, UnifiedUpdateComponentStatus componentStatus, string zipPath, ResolvedInstallPaths paths)
+    private static (bool Success, string UpdaterPath, string WorkingDirectory, List<string> Arguments, string? Error) PrepareInvocation(
+        string component,
+        UnifiedUpdateComponentStatus componentStatus,
+        string zipPath,
+        ResolvedInstallPaths paths,
+        UnifiedInstallCheckpoint checkpoint)
     {
         if (!File.Exists(paths.UpdaterExecutablePath))
         {
@@ -955,7 +1027,7 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
             return (false, string.Empty, string.Empty, new List<string>(), $"Unknown component target: '{component}'.");
         }
 
-        var args = BuildUpdaterArguments(component, stagingDirectory, targetDirectory, manifestPath);
+        var args = BuildUpdaterArguments(component, stagingDirectory, targetDirectory, manifestPath, checkpoint);
         return (true, paths.UpdaterExecutablePath, Path.GetDirectoryName(paths.UpdaterExecutablePath) ?? AppContext.BaseDirectory, args, null);
     }
 
@@ -1038,7 +1110,12 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
         };
     }
 
-    private static List<string> BuildUpdaterArguments(string component, string source, string target, string manifest)
+    private static List<string> BuildUpdaterArguments(
+        string component,
+        string source,
+        string target,
+        string manifest,
+        UnifiedInstallCheckpoint checkpoint)
     {
         var updateFlag = component.ToLowerInvariant() switch
         {
@@ -1052,8 +1129,8 @@ public class UnifiedInstallOrchestrator : IUnifiedInstallOrchestrator
         var restartFlag = component.ToLowerInvariant() switch
         {
             "agent" => "--restart-agent",
-            "server" => "--restart-server",
-            "ui" => "--restart-ui",
+            "server" when checkpoint.ServerWasRunningBeforeUpdate => "--restart-server",
+            "ui" when checkpoint.UiWasRunningBeforeUpdate => "--restart-ui",
             _ => string.Empty
         };
 

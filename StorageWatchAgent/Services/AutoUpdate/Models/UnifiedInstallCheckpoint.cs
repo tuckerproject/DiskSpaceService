@@ -8,7 +8,7 @@ public class UnifiedInstallCheckpoint
     /// <summary>
     /// Schema version for persisted checkpoint compatibility.
     /// </summary>
-    public int SchemaVersion { get; set; } = 3;
+    public int SchemaVersion { get; set; } = 4;
 
     /// <summary>
     /// Unique identifier for this orchestration instance.
@@ -99,6 +99,16 @@ public class UnifiedInstallCheckpoint
     /// Indicates that a server restart was requested by the updater flow.
     /// </summary>
     public bool RestartServerRequested { get; set; }
+
+    /// <summary>
+    /// Indicates whether the UI was running before its update began.
+    /// </summary>
+    public bool UiWasRunningBeforeUpdate { get; set; }
+
+    /// <summary>
+    /// Indicates whether the Server service was running before its update began.
+    /// </summary>
+    public bool ServerWasRunningBeforeUpdate { get; set; }
 }
 
 public enum AgentHandoffState

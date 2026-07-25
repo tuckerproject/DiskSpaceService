@@ -166,6 +166,7 @@ var host = Host.CreateDefaultBuilder(args)
         services.AddSingleton<IInstallPathResolver, InstallPathResolver>();
         services.AddSingleton<IUserSessionLauncher, UserSessionLauncher>();
         services.AddSingleton<IUnifiedInstallCheckpointValidator, UnifiedInstallCheckpointValidator>();
+        services.AddSingleton<IUpdateRestartIntentProcessor, UpdateRestartIntentProcessor>();
         services.AddSingleton<IUnifiedInstallOrchestrator, UnifiedInstallOrchestrator>();
         services.AddHostedService<UnifiedInstallResumeService>();
         services.AddSingleton<IServiceRestartHandler, UpdaterServiceRestartHandler>();
