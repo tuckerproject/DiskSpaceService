@@ -37,8 +37,14 @@ public sealed class UpdateRestartIntentProcessor : IUpdateRestartIntentProcessor
     {
         var restartUiRequested = checkpoint.RestartUIRequested;
         var restartServerRequested = checkpoint.RestartServerRequested;
+        _logger.LogInformation("[AUTOUPDATE-RESTART] Processor entered. OrchestrationId={OrchestrationId}, RestartUIRequested={RestartUIRequested}, RestartServerRequested={RestartServerRequested}, CancellationRequested={CancellationRequested}",
+            checkpoint.OrchestrationId,
+            restartUiRequested,
+            restartServerRequested,
+            cancellationToken.IsCancellationRequested);
         if (!restartUiRequested && !restartServerRequested)
         {
+            _logger.LogInformation("[AUTOUPDATE-RESTART] No restart intent is pending; processor is exiting. OrchestrationId={OrchestrationId}", checkpoint.OrchestrationId);
             return false;
         }
 
@@ -52,7 +58,9 @@ public sealed class UpdateRestartIntentProcessor : IUpdateRestartIntentProcessor
 
         if (restartServerRequested)
         {
+            _logger.LogInformation("[AUTOUPDATE-RESTART] Server restart attempt starting. OrchestrationId={OrchestrationId}, ServiceName={ServiceName}", checkpoint.OrchestrationId, ServerServiceName);
             var serverRestarted = await TryStartServerServiceAsync(ServerServiceName, cancellationToken);
+            _logger.LogInformation("[AUTOUPDATE-RESTART] Server restart attempt completed. OrchestrationId={OrchestrationId}, ServiceName={ServiceName}, Succeeded={Succeeded}", checkpoint.OrchestrationId, ServerServiceName, serverRestarted);
             if (serverRestarted)
             {
                 checkpoint.RestartServerRequested = false;
@@ -67,27 +75,54 @@ public sealed class UpdateRestartIntentProcessor : IUpdateRestartIntentProcessor
 
         if (restartUiRequested)
         {
-            var resolvedPaths = _installPathResolver.Resolve();
-            var uiExecutablePath = Path.Combine(resolvedPaths.UiDirectory, "StorageWatchUI.exe");
-            var restarted = _userSessionLauncher.TryRestartUI(uiExecutablePath, out var sessionId);
-            if (restarted)
+            try
             {
-                checkpoint.RestartUIRequested = false;
-                checkpointUpdated = true;
-                _logger.LogInformation("[UI-RESTART] Restart intent completed in session {SessionId}.", sessionId.HasValue ? sessionId.Value : -1);
+                var resolvedPaths = _installPathResolver.Resolve();
+                var uiExecutablePath = Path.Combine(resolvedPaths.UiDirectory, "StorageWatchUI.exe");
+                _logger.LogInformation("[AUTOUPDATE-RESTART] UI restart attempt starting. OrchestrationId={OrchestrationId}, ExecutablePath={ExecutablePath}", checkpoint.OrchestrationId, uiExecutablePath);
+                var restarted = _userSessionLauncher.TryRestartUI(uiExecutablePath, out var sessionId);
+                _logger.LogInformation("[AUTOUPDATE-RESTART] UI restart attempt completed. OrchestrationId={OrchestrationId}, Succeeded={Succeeded}, SessionId={SessionId}", checkpoint.OrchestrationId, restarted, sessionId);
+                if (restarted)
+                {
+                    checkpoint.RestartUIRequested = false;
+                    checkpointUpdated = true;
+                    _logger.LogInformation("[UI-RESTART] Restart intent completed in session {SessionId}.", sessionId.HasValue ? sessionId.Value : -1);
+                }
+                else
+                {
+                    _logger.LogWarning("[UI-RESTART] Restart intent remains pending because no interactive user-session launch succeeded. OrchestrationId={OrchestrationId}", checkpoint.OrchestrationId);
+                }
             }
-            else
+            catch (Exception ex)
             {
-                _logger.LogInformation("[UI-RESTART] Restart intent remains pending after user-session launch attempt.");
+                _logger.LogWarning(ex, "[UI-RESTART] UI restart attempt failed; retaining intent for retry. OrchestrationId={OrchestrationId}", checkpoint.OrchestrationId);
             }
         }
 
         if (checkpointUpdated)
         {
-            await _checkpointStore.SaveCheckpointAsync(checkpoint, cancellationToken);
+            try
+            {
+                _logger.LogInformation("[AUTOUPDATE-RESTART] Persisting cleared restart intent flags. OrchestrationId={OrchestrationId}, RestartUIRequested={RestartUIRequested}, RestartServerRequested={RestartServerRequested}", checkpoint.OrchestrationId, checkpoint.RestartUIRequested, checkpoint.RestartServerRequested);
+                await _checkpointStore.SaveCheckpointAsync(checkpoint, cancellationToken);
+                _logger.LogInformation("[AUTOUPDATE-RESTART] Cleared restart intent flags were persisted. OrchestrationId={OrchestrationId}", checkpoint.OrchestrationId);
+            }
+            catch (Exception ex)
+            {
+                checkpoint.RestartUIRequested = restartUiRequested;
+                checkpoint.RestartServerRequested = restartServerRequested;
+                _logger.LogError(ex, "[AUTOUPDATE-RESTART] Failed to persist cleared restart intent flags; retaining all original intent for retry. OrchestrationId={OrchestrationId}", checkpoint.OrchestrationId);
+            }
         }
 
-        return checkpoint.RestartUIRequested || checkpoint.RestartServerRequested;
+        var pendingRestartIntents = checkpoint.RestartUIRequested || checkpoint.RestartServerRequested;
+        _logger.LogInformation("[AUTOUPDATE-RESTART] Processor completed. OrchestrationId={OrchestrationId}, PendingRestartIntents={PendingRestartIntents}, RestartUIRequested={RestartUIRequested}, RestartServerRequested={RestartServerRequested}, IntentClearingDecision={IntentClearingDecision}",
+            checkpoint.OrchestrationId,
+            pendingRestartIntents,
+            checkpoint.RestartUIRequested,
+            checkpoint.RestartServerRequested,
+            pendingRestartIntents ? "retain" : "clear");
+        return pendingRestartIntents;
     }
 
     private async Task<bool> TryStartServerServiceAsync(string serviceName, CancellationToken cancellationToken)
@@ -107,13 +142,16 @@ public sealed class UpdateRestartIntentProcessor : IUpdateRestartIntentProcessor
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 serviceController.Refresh();
+                _logger.LogInformation("[SERVER-RESTART] SCM restart attempt {Attempt}/{MaxAttempts}. ServiceName={ServiceName}, Status={Status}", attempt, ServerRestartMaxAttempts, serviceName, serviceController.Status);
                 if (serviceController.Status == ServiceControllerStatus.Running)
                 {
+                    _logger.LogInformation("[SERVER-RESTART] Service {ServiceName} is already running on attempt {Attempt}.", serviceName, attempt);
                     return true;
                 }
 
                 if (serviceController.Status == ServiceControllerStatus.Stopped)
                 {
+                    _logger.LogInformation("[SERVER-RESTART] Starting stopped service {ServiceName} on attempt {Attempt}.", serviceName, attempt);
                     serviceController.Start();
                 }
 
@@ -121,7 +159,9 @@ public sealed class UpdateRestartIntentProcessor : IUpdateRestartIntentProcessor
             }
 
             serviceController.Refresh();
-            return serviceController.Status == ServiceControllerStatus.Running;
+            var started = serviceController.Status == ServiceControllerStatus.Running;
+            _logger.LogInformation("[SERVER-RESTART] SCM restart attempts exhausted. ServiceName={ServiceName}, FinalStatus={Status}, Succeeded={Succeeded}", serviceName, serviceController.Status, started);
+            return started;
         }
         catch (Exception ex)
         {

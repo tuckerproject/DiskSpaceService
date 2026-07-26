@@ -34,16 +34,29 @@ public class UnifiedInstallResumeService : IHostedService
         _orchestrator = orchestrator;
         _restartIntentProcessor = restartIntentProcessor;
         _logger = logger;
+
+        _logger.LogInformation("[AUTOUPDATE-RESUME] UnifiedInstallResumeService constructor completed. CheckpointStore={CheckpointStoreType}, Validator={ValidatorType}, Orchestrator={OrchestratorType}, RestartProcessor={RestartProcessorType}",
+            _checkpointStore.GetType().Name,
+            _checkpointValidator.GetType().Name,
+            _orchestrator.GetType().Name,
+            _restartIntentProcessor.GetType().Name);
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        _logger.LogInformation("[AUTOUPDATE-RESUME] StartAsync entered. CancellationRequested={CancellationRequested}", cancellationToken.IsCancellationRequested);
         try
         {
+            _logger.LogInformation("[AUTOUPDATE-RESUME] Loading startup checkpoint.");
             var loadResult = await _checkpointStore.LoadCheckpointResultAsync(cancellationToken);
+            _logger.LogInformation("[AUTOUPDATE-RESUME] Startup checkpoint load completed. Exists={Exists}, IsCorrupted={IsCorrupted}, HasCheckpoint={HasCheckpoint}, Error={Error}",
+                loadResult.Exists,
+                loadResult.IsCorrupted,
+                loadResult.Checkpoint != null,
+                loadResult.ErrorMessage ?? "<none>");
             if (!loadResult.Exists)
             {
-                _logger.LogDebug("[AUTOUPDATE] No install-plan.json checkpoint found at startup.");
+                _logger.LogInformation("[AUTOUPDATE-RESUME] No install-plan.json checkpoint found at startup; no resume or restart intent processing is required.");
                 return;
             }
 
@@ -67,12 +80,19 @@ public class UnifiedInstallResumeService : IHostedService
 
             var checkpoint = loadResult.Checkpoint;
             _logger.LogInformation(
-                "[AUTOUPDATE] Loaded checkpoint for orchestration {OrchestrationId}: IsInstalling={IsInstalling}, CurrentIndex={Index}, Components={ComponentCount}, LastUpdatedAtUtc={LastUpdatedAtUtc}",
+                "[AUTOUPDATE-RESUME] Loaded checkpoint for orchestration {OrchestrationId}: IsInstalling={IsInstalling}, CurrentIndex={Index}, Components={ComponentCount}, LastUpdatedAtUtc={LastUpdatedAtUtc}, HandoffState={HandoffState}, HandoffStartedAtUtc={HandoffStartedAtUtc}, AgentExitRequestedAtUtc={AgentExitRequestedAtUtc}, HandoffCompletedAtUtc={HandoffCompletedAtUtc}, RestartUIRequested={RestartUIRequested}, RestartServerRequested={RestartServerRequested}, UpdaterProcessId={UpdaterProcessId}",
                 checkpoint.OrchestrationId,
                 checkpoint.IsInstalling,
                 checkpoint.CurrentComponentIndex,
                 checkpoint.Components.Count,
-                checkpoint.LastUpdatedAtUtc);
+                checkpoint.LastUpdatedAtUtc,
+                checkpoint.HandoffState,
+                checkpoint.HandoffStartedAtUtc,
+                checkpoint.AgentExitRequestedAtUtc,
+                checkpoint.HandoffCompletedAtUtc,
+                checkpoint.RestartUIRequested,
+                checkpoint.RestartServerRequested,
+                checkpoint.UpdaterProcessId);
 
             var hasAgentComponent = checkpoint.Components.Contains("agent", StringComparer.OrdinalIgnoreCase);
             var hasHandoffState = checkpoint.HandoffState != AgentHandoffState.None
@@ -80,11 +100,58 @@ public class UnifiedInstallResumeService : IHostedService
                                   || checkpoint.AgentExitRequestedAtUtc.HasValue
                                   || checkpoint.HandoffCompletedAtUtc.HasValue;
 
+            var hasRestartIntent = checkpoint.RestartUIRequested || checkpoint.RestartServerRequested;
+            if (checkpoint.HandoffCompletedAtUtc.HasValue && hasRestartIntent)
+            {
+                if (!hasAgentComponent || !checkpoint.HandoffStartedAtUtc.HasValue)
+                {
+                    _logger.LogWarning("[AUTOUPDATE-RESUME] Completed handoff checkpoint has incomplete diagnostic markers, but restart intent will still be processed immediately. OrchestrationId={OrchestrationId}, HasAgentComponent={HasAgentComponent}, HandoffStartedAtUtc={HandoffStartedAtUtc}, HandoffState={HandoffState}",
+                        checkpoint.OrchestrationId,
+                        hasAgentComponent,
+                        checkpoint.HandoffStartedAtUtc,
+                        checkpoint.HandoffState);
+                }
+
+                _logger.LogInformation("[AUTOUPDATE-RESUME] Completed handoff with restart intent takes priority over checkpoint validation and safety checks. OrchestrationId={OrchestrationId}, RestartUIRequested={RestartUIRequested}, RestartServerRequested={RestartServerRequested}",
+                    checkpoint.OrchestrationId,
+                    checkpoint.RestartUIRequested,
+                    checkpoint.RestartServerRequested);
+
+                var pendingRestartIntents = await _restartIntentProcessor.ProcessAsync(checkpoint, cancellationToken);
+                _logger.LogInformation("[AUTOUPDATE-RESUME] Completed-handoff restart processing finished. OrchestrationId={OrchestrationId}, PendingRestartIntents={PendingRestartIntents}, RestartUIRequested={RestartUIRequested}, RestartServerRequested={RestartServerRequested}",
+                    checkpoint.OrchestrationId,
+                    pendingRestartIntents,
+                    checkpoint.RestartUIRequested,
+                    checkpoint.RestartServerRequested);
+
+                if (pendingRestartIntents)
+                {
+                    _logger.LogWarning("[AUTOUPDATE-RESUME] Restart intent remains after completed Agent handoff; retaining checkpoint for retry. OrchestrationId={OrchestrationId}", checkpoint.OrchestrationId);
+                    return;
+                }
+
+                await DeleteCheckpointSafelyAsync(cancellationToken, "completed Agent handoff restart intent processed");
+                return;
+            }
+
             if (hasAgentComponent && hasHandoffState)
             {
+                _logger.LogInformation("[AUTOUPDATE-RESUME] Agent handoff checkpoint detected. HasAgentComponent={HasAgentComponent}, HasHandoffState={HasHandoffState}, HandoffCompleted={HandoffCompleted}",
+                    hasAgentComponent,
+                    hasHandoffState,
+                    checkpoint.HandoffCompletedAtUtc.HasValue);
                 if (checkpoint.HandoffCompletedAtUtc.HasValue)
                 {
+                    _logger.LogInformation("[AUTOUPDATE-RESUME] Entering restart-intent processor for completed Agent handoff. OrchestrationId={OrchestrationId}, RestartUIRequested={RestartUIRequested}, RestartServerRequested={RestartServerRequested}",
+                        checkpoint.OrchestrationId,
+                        checkpoint.RestartUIRequested,
+                        checkpoint.RestartServerRequested);
                     var pendingRestartIntents = await _restartIntentProcessor.ProcessAsync(checkpoint, cancellationToken);
+                    _logger.LogInformation("[AUTOUPDATE-RESUME] Restart-intent processor completed for completed Agent handoff. OrchestrationId={OrchestrationId}, PendingRestartIntents={PendingRestartIntents}, RestartUIRequested={RestartUIRequested}, RestartServerRequested={RestartServerRequested}",
+                        checkpoint.OrchestrationId,
+                        pendingRestartIntents,
+                        checkpoint.RestartUIRequested,
+                        checkpoint.RestartServerRequested);
                     if (pendingRestartIntents)
                     {
                         _logger.LogInformation(
@@ -110,6 +177,14 @@ public class UnifiedInstallResumeService : IHostedService
                 var handoffIsInProgress = checkpoint.HandoffState is AgentHandoffState.Started or AgentHandoffState.ExitRequested;
                 var handoffIsFresh = markerAge <= HandoffInProgressGrace;
 
+                _logger.LogInformation("[AUTOUPDATE-RESUME] Evaluated incomplete Agent handoff safety. OrchestrationId={OrchestrationId}, State={State}, MarkerAgeSeconds={MarkerAgeSeconds:F1}, UpdaterRunning={UpdaterRunning}, HandoffIsInProgress={HandoffIsInProgress}, HandoffIsFresh={HandoffIsFresh}",
+                    checkpoint.OrchestrationId,
+                    checkpoint.HandoffState,
+                    markerAge.TotalSeconds,
+                    updaterProcessRunning,
+                    handoffIsInProgress,
+                    handoffIsFresh);
+
                 if (handoffIsInProgress && (updaterProcessRunning || handoffIsFresh))
                 {
                     _logger.LogInformation(
@@ -133,7 +208,16 @@ public class UnifiedInstallResumeService : IHostedService
 
             if (!checkpoint.IsInstalling)
             {
+                _logger.LogInformation("[AUTOUPDATE-RESUME] Checkpoint is not installing; entering restart-intent processor. OrchestrationId={OrchestrationId}, RestartUIRequested={RestartUIRequested}, RestartServerRequested={RestartServerRequested}",
+                    checkpoint.OrchestrationId,
+                    checkpoint.RestartUIRequested,
+                    checkpoint.RestartServerRequested);
                 var pendingRestartIntents = await _restartIntentProcessor.ProcessAsync(checkpoint, cancellationToken);
+                _logger.LogInformation("[AUTOUPDATE-RESUME] Restart-intent processor completed for non-installing checkpoint. OrchestrationId={OrchestrationId}, PendingRestartIntents={PendingRestartIntents}, RestartUIRequested={RestartUIRequested}, RestartServerRequested={RestartServerRequested}",
+                    checkpoint.OrchestrationId,
+                    pendingRestartIntents,
+                    checkpoint.RestartUIRequested,
+                    checkpoint.RestartServerRequested);
                 if (pendingRestartIntents)
                 {
                     _logger.LogInformation(
@@ -151,9 +235,12 @@ public class UnifiedInstallResumeService : IHostedService
 
             var validation = _checkpointValidator.Validate(checkpoint);
             _logger.LogInformation(
-                "[AUTOUPDATE] Resume validation for orchestration {OrchestrationId}: State={State}, Reason={Reason}, Signals={Signals}",
+                "[AUTOUPDATE-RESUME] Resume validation completed for orchestration {OrchestrationId}: State={State}, ShouldResume={ShouldResume}, ShouldDelete={ShouldDelete}, IsCorrupted={IsCorrupted}, Reason={Reason}, Signals={Signals}",
                 checkpoint.OrchestrationId,
                 validation.State,
+                validation.ShouldResume,
+                validation.ShouldDelete,
+                validation.IsCorrupted,
                 validation.Reason,
                 string.Join(" | ", validation.Signals));
 
@@ -193,9 +280,17 @@ public class UnifiedInstallResumeService : IHostedService
                 "[AUTOUPDATE] Checkpoint {OrchestrationId} is pending but not yet eligible for resume; leaving it in place and continuing startup.",
                 checkpoint.OrchestrationId);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("[AUTOUPDATE-RESUME] StartAsync was cancelled while evaluating the startup checkpoint.");
+        }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[AUTOUPDATE] Failed to evaluate pending checkpoint on startup.");
+            _logger.LogError(ex, "[AUTOUPDATE-RESUME] Failed to evaluate pending checkpoint on startup.");
+        }
+        finally
+        {
+            _logger.LogInformation("[AUTOUPDATE-RESUME] StartAsync completed.");
         }
     }
 

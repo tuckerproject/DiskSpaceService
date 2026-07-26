@@ -169,6 +169,7 @@ var host = Host.CreateDefaultBuilder(args)
         services.AddSingleton<IUpdateRestartIntentProcessor, UpdateRestartIntentProcessor>();
         services.AddSingleton<IUnifiedInstallOrchestrator, UnifiedInstallOrchestrator>();
         services.AddHostedService<UnifiedInstallResumeService>();
+        new RollingFileLogger(logFilePath).Log("[AUTOUPDATE] Registered UnifiedInstallResumeService as a hosted startup service after all required update-resume dependencies.");
         services.AddSingleton<IServiceRestartHandler, UpdaterServiceRestartHandler>();
 
         services.AddSingleton<IServiceUpdateInstaller, AgentUpdateHandoffInstaller>();

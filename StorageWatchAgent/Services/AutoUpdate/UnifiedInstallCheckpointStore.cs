@@ -79,11 +79,16 @@ public class UnifiedInstallCheckpointStore : IUnifiedInstallCheckpointStore
             File.Move(tempPath, CheckpointFilePath, overwrite: true);
 
             _logger.LogInformation(
-                "Saved checkpoint for orchestration {OrchestrationId}, index {Index}/{Total}, installing={Installing}",
+                "[AUTOUPDATE-CHECKPOINT] Saved checkpoint. Path={CheckpointPath}, OrchestrationId={OrchestrationId}, Index={Index}/{Total}, Installing={Installing}, HandoffState={HandoffState}, HandoffCompletedAtUtc={HandoffCompletedAtUtc}, RestartUIRequested={RestartUIRequested}, RestartServerRequested={RestartServerRequested}",
+                CheckpointFilePath,
                 checkpoint.OrchestrationId,
                 checkpoint.CurrentComponentIndex,
                 checkpoint.Components.Count,
-                checkpoint.IsInstalling
+                checkpoint.IsInstalling,
+                checkpoint.HandoffState,
+                checkpoint.HandoffCompletedAtUtc,
+                checkpoint.RestartUIRequested,
+                checkpoint.RestartServerRequested
             );
         }
         catch (Exception ex)
@@ -110,7 +115,7 @@ public class UnifiedInstallCheckpointStore : IUnifiedInstallCheckpointStore
         {
             if (!File.Exists(CheckpointFilePath))
             {
-                _logger.LogDebug("No checkpoint file found at {Path}", CheckpointFilePath);
+                _logger.LogInformation("[AUTOUPDATE-CHECKPOINT] Checkpoint load found no file. Path={CheckpointPath}", CheckpointFilePath);
                 return new UnifiedInstallCheckpointLoadResult
                 {
                     Exists = false,
@@ -128,11 +133,17 @@ public class UnifiedInstallCheckpointStore : IUnifiedInstallCheckpointStore
                 if (checkpoint != null)
                 {
                     _logger.LogInformation(
-                        "Loaded checkpoint for orchestration {OrchestrationId}, index {Index}/{Total}, installing={Installing}",
+                        "[AUTOUPDATE-CHECKPOINT] Loaded valid checkpoint. Path={CheckpointPath}, OrchestrationId={OrchestrationId}, Index={Index}/{Total}, Installing={Installing}, HandoffState={HandoffState}, HandoffStartedAtUtc={HandoffStartedAtUtc}, HandoffCompletedAtUtc={HandoffCompletedAtUtc}, RestartUIRequested={RestartUIRequested}, RestartServerRequested={RestartServerRequested}",
+                        CheckpointFilePath,
                         checkpoint.OrchestrationId,
                         checkpoint.CurrentComponentIndex,
                         checkpoint.Components.Count,
-                        checkpoint.IsInstalling
+                        checkpoint.IsInstalling,
+                        checkpoint.HandoffState,
+                        checkpoint.HandoffStartedAtUtc,
+                        checkpoint.HandoffCompletedAtUtc,
+                        checkpoint.RestartUIRequested,
+                        checkpoint.RestartServerRequested
                     );
 
                     return new UnifiedInstallCheckpointLoadResult
@@ -144,7 +155,7 @@ public class UnifiedInstallCheckpointStore : IUnifiedInstallCheckpointStore
                     };
                 }
 
-                _logger.LogWarning("Checkpoint file at {Path} deserialized to null.", CheckpointFilePath);
+                _logger.LogWarning("[AUTOUPDATE-CHECKPOINT] Checkpoint load classified file as corrupted because deserialization returned null. Path={CheckpointPath}", CheckpointFilePath);
                 return new UnifiedInstallCheckpointLoadResult
                 {
                     Exists = true,
@@ -155,7 +166,7 @@ public class UnifiedInstallCheckpointStore : IUnifiedInstallCheckpointStore
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to load checkpoint from {Path}", CheckpointFilePath);
+                _logger.LogError(ex, "[AUTOUPDATE-CHECKPOINT] Checkpoint load classified file as corrupted. Path={CheckpointPath}", CheckpointFilePath);
                 return new UnifiedInstallCheckpointLoadResult
                 {
                     Exists = true,
@@ -179,7 +190,7 @@ public class UnifiedInstallCheckpointStore : IUnifiedInstallCheckpointStore
             if (File.Exists(CheckpointFilePath))
             {
                 File.Delete(CheckpointFilePath);
-                _logger.LogInformation("Cleared checkpoint at {Path}", CheckpointFilePath);
+                _logger.LogInformation("[AUTOUPDATE-CHECKPOINT] Cleared checkpoint. Path={CheckpointPath}", CheckpointFilePath);
             }
             else
             {

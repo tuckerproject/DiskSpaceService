@@ -24,96 +24,16 @@ void LogComplete()
 
 bool TryPersistRestartIntent(bool restartUiRequested, bool restartServerRequested)
 {
-    if (!restartUiRequested && !restartServerRequested)
-    {
-        logger.Log("[DIAG] Restart intent persistence skipped because no restart flags were requested.");
-        return true;
-    }
-
-    try
-    {
-        var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
-        var checkpointPath = Path.Combine(programData, "StorageWatch", "Update", "install-plan.json");
-        if (!File.Exists(checkpointPath))
-        {
-            logger.Log($"[WARN] Restart intent was requested but checkpoint file was not found: {checkpointPath}");
-            return false;
-        }
-
-        var json = File.ReadAllText(checkpointPath);
-        var node = JsonNode.Parse(json) as JsonObject;
-        if (node == null)
-        {
-            logger.Log("[WARN] Restart intent was requested but checkpoint JSON was invalid.");
-            return false;
-        }
-
-        var now = DateTimeOffset.UtcNow;
-        if (restartUiRequested)
-        {
-            node["restartUIRequested"] = true;
-            logger.Log("[UI-RESTART] Restart requested; recorded restartUIRequested=true in checkpoint.");
-        }
-
-        if (restartServerRequested)
-        {
-            node["restartServerRequested"] = true;
-            logger.Log("[SERVER-RESTART] Restart requested; recorded restartServerRequested=true in checkpoint.");
-        }
-
-        node["lastUpdatedAtUtc"] = now.ToString("O");
-
-        var output = node.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
-        var tempPath = checkpointPath + ".tmp";
-        File.WriteAllText(tempPath, output);
-        File.Move(tempPath, checkpointPath, overwrite: true);
-        logger.Log($"[STEP] Persisted restart intent to checkpoint: {checkpointPath}");
-        return true;
-    }
-    catch (Exception ex)
-    {
-        logger.Log($"[WARN] Failed to persist restart intent: {ex.Message}");
-        return false;
-    }
+    var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+    var checkpointPath = Path.Combine(programData, "StorageWatch", "Update", "install-plan.json");
+    return CheckpointHandoffStore.TryPersistRestartIntent(checkpointPath, restartUiRequested, restartServerRequested, logger.Log);
 }
 
 bool TryPersistAgentHandoffComplete()
 {
-    try
-    {
-        var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
-        var checkpointPath = Path.Combine(programData, "StorageWatch", "Update", "install-plan.json");
-        if (!File.Exists(checkpointPath))
-        {
-            logger.Log($"[WARN] Handoff-complete marker not persisted because checkpoint file was not found: {checkpointPath}");
-            return false;
-        }
-
-        var json = File.ReadAllText(checkpointPath);
-        var node = JsonNode.Parse(json) as JsonObject;
-        if (node == null)
-        {
-            logger.Log("[WARN] Handoff-complete marker not persisted because checkpoint JSON was invalid.");
-            return false;
-        }
-
-        var now = DateTimeOffset.UtcNow;
-        node["handoffCompletedAtUtc"] = now.ToString("O");
-        node["handoffState"] = 3;
-        node["lastUpdatedAtUtc"] = now.ToString("O");
-
-        var output = node.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
-        var tempPath = checkpointPath + ".tmp";
-        File.WriteAllText(tempPath, output);
-        File.Move(tempPath, checkpointPath, overwrite: true);
-        logger.Log($"[STEP] Persisted handoff-complete marker to checkpoint: {checkpointPath}");
-        return true;
-    }
-    catch (Exception ex)
-    {
-        logger.Log($"[WARN] Failed to persist handoff-complete marker: {ex.Message}");
-        return false;
-    }
+    var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+    var checkpointPath = Path.Combine(programData, "StorageWatch", "Update", "install-plan.json");
+    return CheckpointHandoffStore.TryPersistAgentHandoffComplete(checkpointPath, logger.Log);
 }
 
 try

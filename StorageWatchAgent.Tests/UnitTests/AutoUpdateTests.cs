@@ -872,6 +872,64 @@ namespace StorageWatch.Tests.UnitTests
         }
 
         [Fact]
+        public async Task UnifiedInstallResumeService_ProcessesCompletedHandoffRestartIntentsBeforeSafetyValidation()
+        {
+            var checkpoint = new UnifiedInstallCheckpoint
+            {
+                OrchestrationId = Guid.NewGuid().ToString("N"),
+                IsInstalling = true,
+                HandoffState = AgentHandoffState.Completed,
+                HandoffCompletedAtUtc = DateTimeOffset.UtcNow,
+                RestartUIRequested = true,
+                RestartServerRequested = true
+            };
+            var store = new InMemoryCheckpointStore();
+            await store.SaveCheckpointAsync(checkpoint, CancellationToken.None);
+            var processor = new RecordingRestartIntentProcessor(clearIntents: true);
+            var service = CreateResumeService(
+                store,
+                new ThrowingCheckpointValidator(),
+                new RecordingUnifiedInstallOrchestrator(),
+                TestHelpers.CreateTempDirectory(),
+                new FakeUserSessionLauncher(),
+                processor);
+
+            await service.StartAsync(CancellationToken.None);
+
+            processor.CallCount.Should().Be(1);
+            processor.ReceivedCheckpoint.Should().BeSameAs(checkpoint);
+            (await store.CheckpointExistsAsync()).Should().BeFalse();
+        }
+
+        [Fact]
+        public async Task UnifiedInstallResumeService_RetainsCompletedHandoffCheckpoint_WhenRestartIntentRemains()
+        {
+            var checkpoint = new UnifiedInstallCheckpoint
+            {
+                OrchestrationId = Guid.NewGuid().ToString("N"),
+                IsInstalling = true,
+                HandoffCompletedAtUtc = DateTimeOffset.UtcNow,
+                RestartUIRequested = true,
+                RestartServerRequested = true
+            };
+            var store = new InMemoryCheckpointStore();
+            await store.SaveCheckpointAsync(checkpoint, CancellationToken.None);
+            var processor = new RecordingRestartIntentProcessor(clearIntents: false);
+            var service = CreateResumeService(
+                store,
+                new ThrowingCheckpointValidator(),
+                new RecordingUnifiedInstallOrchestrator(),
+                TestHelpers.CreateTempDirectory(),
+                new FakeUserSessionLauncher(),
+                processor);
+
+            await service.StartAsync(CancellationToken.None);
+
+            processor.CallCount.Should().Be(1);
+            (await store.CheckpointExistsAsync()).Should().BeTrue();
+        }
+
+        [Fact]
         public async Task NetworkTimeoutDownloader_Failure_Regresses_NoResumeCollision()
         {
             var component = new ComponentUpdateInfo
@@ -905,6 +963,41 @@ namespace StorageWatch.Tests.UnitTests
             {
                 sessionId = _sessionId;
                 return _shouldSucceed;
+            }
+        }
+
+        private sealed class RecordingRestartIntentProcessor : IUpdateRestartIntentProcessor
+        {
+            private readonly bool _clearIntents;
+
+            public RecordingRestartIntentProcessor(bool clearIntents)
+            {
+                _clearIntents = clearIntents;
+            }
+
+            public int CallCount { get; private set; }
+
+            public UnifiedInstallCheckpoint? ReceivedCheckpoint { get; private set; }
+
+            public Task<bool> ProcessAsync(UnifiedInstallCheckpoint checkpoint, CancellationToken cancellationToken)
+            {
+                CallCount++;
+                ReceivedCheckpoint = checkpoint;
+                if (_clearIntents)
+                {
+                    checkpoint.RestartUIRequested = false;
+                    checkpoint.RestartServerRequested = false;
+                }
+
+                return Task.FromResult(!_clearIntents);
+            }
+        }
+
+        private sealed class ThrowingCheckpointValidator : IUnifiedInstallCheckpointValidator
+        {
+            public UnifiedInstallCheckpointValidationResult Validate(UnifiedInstallCheckpoint checkpoint)
+            {
+                throw new Xunit.Sdk.XunitException("Completed handoff restart intent should be processed before validation.");
             }
         }
 
@@ -968,9 +1061,10 @@ namespace StorageWatch.Tests.UnitTests
             IUnifiedInstallCheckpointValidator checkpointValidator,
             IUnifiedInstallOrchestrator orchestrator,
             string root,
-            IUserSessionLauncher userSessionLauncher)
+            IUserSessionLauncher userSessionLauncher,
+            IUpdateRestartIntentProcessor? restartIntentProcessor = null)
         {
-            var restartIntentProcessor = new UpdateRestartIntentProcessor(
+            restartIntentProcessor ??= new UpdateRestartIntentProcessor(
                 checkpointStore,
                 new StubInstallPathResolver(root),
                 userSessionLauncher,

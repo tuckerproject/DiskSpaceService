@@ -69,6 +69,34 @@ public sealed class UnifiedInstallCheckpointValidator : IUnifiedInstallCheckpoin
 
     public UnifiedInstallCheckpointValidationResult Validate(UnifiedInstallCheckpoint checkpoint)
     {
+        _logger.LogInformation("[AUTOUPDATE-VALIDATION] Checkpoint validation entered. OrchestrationId={OrchestrationId}, SchemaVersion={SchemaVersion}, IsInstalling={IsInstalling}, ResumeAttemptCount={ResumeAttemptCount}, HandoffState={HandoffState}, HandoffStartedAtUtc={HandoffStartedAtUtc}, AgentExitRequestedAtUtc={AgentExitRequestedAtUtc}, HandoffCompletedAtUtc={HandoffCompletedAtUtc}, RestartUIRequested={RestartUIRequested}, RestartServerRequested={RestartServerRequested}, ComponentCount={ComponentCount}, ComponentStateCount={ComponentStateCount}",
+            checkpoint?.OrchestrationId ?? "<null>",
+            checkpoint?.SchemaVersion,
+            checkpoint?.IsInstalling,
+            checkpoint?.ResumeAttemptCount,
+            checkpoint?.HandoffState,
+            checkpoint?.HandoffStartedAtUtc,
+            checkpoint?.AgentExitRequestedAtUtc,
+            checkpoint?.HandoffCompletedAtUtc,
+            checkpoint?.RestartUIRequested,
+            checkpoint?.RestartServerRequested,
+            checkpoint?.Components?.Count,
+            checkpoint?.ComponentStates?.Count);
+
+        var result = ValidateCore(checkpoint);
+        _logger.LogInformation("[AUTOUPDATE-VALIDATION] Checkpoint validation completed. OrchestrationId={OrchestrationId}, State={State}, ShouldResume={ShouldResume}, ShouldDelete={ShouldDelete}, IsCorrupted={IsCorrupted}, Reason={Reason}, Signals={Signals}",
+            checkpoint?.OrchestrationId ?? "<null>",
+            result.State,
+            result.ShouldResume,
+            result.ShouldDelete,
+            result.IsCorrupted,
+            result.Reason,
+            string.Join(" | ", result.Signals));
+        return result;
+    }
+
+    private UnifiedInstallCheckpointValidationResult ValidateCore(UnifiedInstallCheckpoint checkpoint)
+    {
         if (checkpoint == null)
         {
             return Corrupted("Checkpoint data was null.");
