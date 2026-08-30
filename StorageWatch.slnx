@@ -9,19 +9,11 @@
     <File Path="Docs/CHANGELOG.md" />
     <File Path="Docs/ConfigReference.md" />
     <File Path="Docs/CONTRIBUTING.md" />
-    <File Path="Docs/CopilotMasterPrompt.md" />
     <File Path="Docs/FAQ.md" />
     <File Path="Docs/Installer.md" />
     <File Path="Docs/README.md" />
-    <File Path="Docs/SQLiteMigration.md" />
+    <File Path="Docs/ServerApi.md" />
     <File Path="Docs/Troubleshooting.md" />
-  </Folder>
-  <Folder Name="/InstallerNSIS/">
-    <File Path="InstallerNSIS/StorageWatchInstaller.nsi" />
-  </Folder>
-  <Folder Name="/InstallerNSIS/Docs/">
-    <File Path="InstallerNSIS/Docs/QUICK-START.md" />
-    <File Path="InstallerNSIS/Docs/README.md" />
   </Folder>
   <Project Path="StorageWatch.Shared.Update/StorageWatch.Shared.Update.csproj" />
   <Project Path="StorageWatch.Updater.Tests/StorageWatch.Updater.Tests.csproj" />
