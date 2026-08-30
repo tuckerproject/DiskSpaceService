@@ -131,6 +131,30 @@ var host = Host.CreateDefaultBuilder(args)
         // ====================================================================
 
         // ====================================================================
+        // Auto-Update Services
+        // ====================================================================
+
+        services.AddHttpClient<IServiceUpdateChecker, ServiceUpdateChecker>();
+        services.AddHttpClient<IServiceUpdateDownloader, ServiceUpdateDownloader>();
+        services.AddHttpClient<IUnifiedUpdateChecker, UnifiedUpdateChecker>();
+        services.AddSingleton<IUnifiedUpdateSnapshotStore, InMemoryUnifiedUpdateSnapshotStore>();
+        services.AddSingleton<IUnifiedInstallCheckpointStore, UnifiedInstallCheckpointStore>();
+        services.AddSingleton<IInstallPathResolver, InstallPathResolver>();
+        services.AddSingleton<IUserSessionLauncher, UserSessionLauncher>();
+        services.AddSingleton<IUnifiedInstallCheckpointValidator, UnifiedInstallCheckpointValidator>();
+        services.AddSingleton<IUpdateRestartIntentProcessor, UpdateRestartIntentProcessor>();
+        services.AddSingleton<IUnifiedInstallOrchestrator, UnifiedInstallOrchestrator>();
+        services.AddHostedService<UnifiedInstallResumeService>();
+        new RollingFileLogger(logFilePath).Log("[AUTOUPDATE] Registered UnifiedInstallResumeService before continuous hosted services.");
+        services.AddSingleton<IServiceRestartHandler, UpdaterServiceRestartHandler>();
+
+        services.AddSingleton<IServiceUpdateInstaller, AgentUpdateHandoffInstaller>();
+        services.AddSingleton<IAutoUpdateTimerFactory, AutoUpdateTimerFactory>();
+        services.AddHttpClient<IPluginUpdateChecker, PluginUpdateChecker>();
+        services.AddHttpClient<IPluginUpdateDownloader, PluginUpdateDownloader>();
+        services.AddSingleton<IPluginUpdateInstaller, PluginUpdateInstaller>();
+
+        // ====================================================================
         // IPC Communication Server Registration
         // ====================================================================
 
@@ -151,32 +175,8 @@ var host = Host.CreateDefaultBuilder(args)
             services.AddHostedService<CentralPublisher>();
         }
 
-        // Register the Worker as a hosted background service that will run continuously
+        // Register the Worker after the resume service so its notification loop cannot start first.
         services.AddHostedService<Worker>();
-
-        // ====================================================================
-        // Auto-Update Services
-        // ====================================================================
-
-        services.AddHttpClient<IServiceUpdateChecker, ServiceUpdateChecker>();
-        services.AddHttpClient<IServiceUpdateDownloader, ServiceUpdateDownloader>();
-        services.AddHttpClient<IUnifiedUpdateChecker, UnifiedUpdateChecker>();
-        services.AddSingleton<IUnifiedUpdateSnapshotStore, InMemoryUnifiedUpdateSnapshotStore>();
-        services.AddSingleton<IUnifiedInstallCheckpointStore, UnifiedInstallCheckpointStore>();
-        services.AddSingleton<IInstallPathResolver, InstallPathResolver>();
-        services.AddSingleton<IUserSessionLauncher, UserSessionLauncher>();
-        services.AddSingleton<IUnifiedInstallCheckpointValidator, UnifiedInstallCheckpointValidator>();
-        services.AddSingleton<IUpdateRestartIntentProcessor, UpdateRestartIntentProcessor>();
-        services.AddSingleton<IUnifiedInstallOrchestrator, UnifiedInstallOrchestrator>();
-        services.AddHostedService<UnifiedInstallResumeService>();
-        new RollingFileLogger(logFilePath).Log("[AUTOUPDATE] Registered UnifiedInstallResumeService as a hosted startup service after all required update-resume dependencies.");
-        services.AddSingleton<IServiceRestartHandler, UpdaterServiceRestartHandler>();
-
-        services.AddSingleton<IServiceUpdateInstaller, AgentUpdateHandoffInstaller>();
-        services.AddSingleton<IAutoUpdateTimerFactory, AutoUpdateTimerFactory>();
-        services.AddHttpClient<IPluginUpdateChecker, PluginUpdateChecker>();
-        services.AddHttpClient<IPluginUpdateDownloader, PluginUpdateDownloader>();
-        services.AddSingleton<IPluginUpdateInstaller, PluginUpdateInstaller>();
         services.AddHostedService<AutoUpdateWorker>();
 
         // ====================================================================
