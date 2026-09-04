@@ -67,6 +67,10 @@ public class RawRowsController : ControllerBase
             }
         }
 
+        var machineNameForLog = request.MachineName
+            .Replace("\r", string.Empty)
+            .Replace("\n", string.Empty);
+
         try
         {
             // Convert request rows to domain model
@@ -85,14 +89,14 @@ public class RawRowsController : ControllerBase
 
             _logger.LogInformation(
                 "Batch report accepted from machine '{MachineName}' with {RowCount} rows.",
-                request.MachineName,
+                machineNameForLog,
                 request.Rows.Count);
 
             return Ok(new { message = "Batch report received and processed." });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error processing batch report from machine '{MachineName}'", request.MachineName);
+            _logger.LogError(ex, "Error processing batch report from machine '{MachineName}'", machineNameForLog);
             _rollingLogger?.Log($"[ERROR] Endpoint /api/agent/report failed: {ex.Message}");
             return StatusCode(StatusCodes.Status500InternalServerError,
                 new { error = "An error occurred processing the report." });
