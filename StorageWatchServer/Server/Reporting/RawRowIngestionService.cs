@@ -47,9 +47,13 @@ public class RawRowIngestionService
             throw new ArgumentException("Machine name must be provided and rows list must not be empty.");
         }
 
+        var machineNameForLog = machineName
+            .Replace("\r", string.Empty)
+            .Replace("\n", string.Empty);
+
         await using var operation = await _databaseShutdownCoordinator.BeginOperationAsync();
 
-        _logger?.Log($"[INGEST] Received report from {machineName} with {rows.Count} rows");
+        _logger?.Log($"[INGEST] Received report from {machineNameForLog} with {rows.Count} rows");
 
         await using var connection = new SqliteConnection(GetConnectionString());
         await connection.OpenAsync();
@@ -59,7 +63,7 @@ public class RawRowIngestionService
             await command.ExecuteNonQueryAsync();
         }
 
-        _logger?.Log($"[DB] Inserting {rows.Count} RawDriveRows for {machineName}");
+        _logger?.Log($"[DB] Inserting {rows.Count} RawDriveRows for {machineNameForLog}");
 
         await using SqliteTransaction transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
 
@@ -87,7 +91,7 @@ public class RawRowIngestionService
             }
 
             await transaction.CommitAsync();
-            _logger?.Log($"[DB] Insert committed successfully for {machineName}");
+            _logger?.Log($"[DB] Insert committed successfully for {machineNameForLog}");
         }
         catch (Exception ex)
         {

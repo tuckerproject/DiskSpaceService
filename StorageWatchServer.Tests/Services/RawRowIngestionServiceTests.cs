@@ -138,6 +138,60 @@ public class RawRowIngestionServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task IngestRawRowsAsync_WithCrLfInMachineName_SanitizesMachineNameInLogsOnly()
+    {
+        // Arrange
+        var machineName = "TestMachine\r\nForgedLine";
+        var logDirectory = Path.Combine(Path.GetTempPath(), "StorageWatchServerTests", Guid.NewGuid().ToString("N"));
+        var logPath = Path.Combine(logDirectory, "server.log");
+        var logger = new StorageWatchServer.Services.Logging.RollingFileLogger(logPath);
+        var ingestionService = new RawRowIngestionService(_factory!.GetOptions(), logger);
+        var rows = new List<RawDriveRow>
+        {
+            new()
+            {
+                MachineName = machineName,
+                DriveLetter = "C:",
+                TotalSpaceGb = 500,
+                UsedSpaceGb = 250,
+                FreeSpaceGb = 250,
+                PercentFree = 50,
+                Timestamp = DateTime.UtcNow
+            }
+        };
+
+        try
+        {
+            // Act
+            await ingestionService.IngestRawRowsAsync(machineName, rows);
+
+            // Assert
+            var logLines = File.ReadAllLines(logPath);
+            var logContent = File.ReadAllText(logPath);
+            Assert.Equal(3, logLines.Length);
+            Assert.DoesNotContain(machineName, logContent, StringComparison.Ordinal);
+            Assert.Contains(logLines, line => line.Contains("Received report from TestMachineForgedLine with 1 rows", StringComparison.Ordinal));
+            Assert.Contains(logLines, line => line.Contains("Inserting 1 RawDriveRows for TestMachineForgedLine", StringComparison.Ordinal));
+            Assert.Contains(logLines, line => line.Contains("Insert committed successfully for TestMachineForgedLine", StringComparison.Ordinal));
+
+            var serverOptions = _factory.GetOptions();
+            await using var connection = new SqliteConnection($"Data Source={serverOptions.DatabasePath}");
+            await connection.OpenAsync();
+
+            const string query = "SELECT COUNT(*) FROM RawDriveRows WHERE MachineName = @machineName";
+            await using var command = new SqliteCommand(query, connection);
+            command.Parameters.AddWithValue("@machineName", machineName);
+
+            var count = (long?)await command.ExecuteScalarAsync();
+            Assert.Equal(1, count);
+        }
+        finally
+        {
+            Directory.Delete(logDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task IngestRawRowsAsync_WithMultipleBatches_InsertsAllRows()
     {
         // Arrange
