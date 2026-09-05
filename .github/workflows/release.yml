@@ -95,7 +95,7 @@ jobs:
           "tag_name=$tagName" >> $env:GITHUB_OUTPUT
 
       - name: Restore solution
-        run: dotnet restore
+        run: dotnet restore --force-evaluate
 
       - name: Restore updater project
         run: dotnet restore StorageWatch.Updater/StorageWatch.Updater.csproj
