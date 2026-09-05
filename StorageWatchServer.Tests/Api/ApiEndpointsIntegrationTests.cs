@@ -150,6 +150,40 @@ public class ApiEndpointsIntegrationTests : IAsyncLifetime
         Assert.Contains("machineName is required", responseContent);
     }
 
+    [Theory]
+    [InlineData("TestMachine\r\nForgedEntry")]
+    [InlineData("TestMachine\u0085ForgedEntry")]
+    [InlineData("TestMachine\u2028ForgedEntry")]
+    [InlineData("TestMachine\u2029ForgedEntry")]
+    public async Task ReportEndpoint_RejectsMachineNameWithLineBreaks_Returns400BadRequest(string machineName)
+    {
+        // Arrange
+        var request = new AgentReportRequest
+        {
+            MachineName = machineName,
+            Rows = new List<RawDriveRowRequest>
+            {
+                new()
+                {
+                    DriveLetter = "C:",
+                    TotalSpaceGb = 500,
+                    UsedSpaceGb = 250,
+                    FreeSpaceGb = 250,
+                    PercentFree = 50,
+                    Timestamp = DateTime.UtcNow
+                }
+            }
+        };
+
+        // Act
+        var response = await _client!.PostAsJsonAsync("/api/agent/report", request);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var responseContent = await response.Content.ReadAsStringAsync();
+        Assert.Contains("machineName contains invalid line break characters", responseContent);
+    }
+
     [Fact]
     public async Task ReportEndpoint_RejectsNullRows_Returns400BadRequest()
     {

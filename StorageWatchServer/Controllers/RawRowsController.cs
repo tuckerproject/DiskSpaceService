@@ -69,7 +69,16 @@ public class RawRowsController : ControllerBase
 
         var machineNameForLog = request.MachineName
             .Replace("\r", string.Empty)
-            .Replace("\n", string.Empty);
+            .Replace("\n", string.Empty)
+            .Replace("\u0085", string.Empty)
+            .Replace("\u2028", string.Empty)
+            .Replace("\u2029", string.Empty);
+
+        if (machineNameForLog != request.MachineName)
+        {
+            _rollingLogger?.Log("[WEBHOST] Endpoint /api/agent/report failed: machineName contains invalid line break characters");
+            return BadRequest(new { error = "machineName contains invalid line break characters." });
+        }
 
         try
         {
