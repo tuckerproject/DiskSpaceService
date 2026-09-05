@@ -68,7 +68,8 @@ public class RawRowsController : ControllerBase
         }
 
         var machineNameForLog = request.MachineName
-            .ReplaceLineEndings(string.Empty)
+            .Replace("\r", string.Empty)
+            .Replace("\n", string.Empty)
             .Replace("\u0085", string.Empty)
             .Replace("\u2028", string.Empty)
             .Replace("\u2029", string.Empty);
