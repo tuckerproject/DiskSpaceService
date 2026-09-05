@@ -151,6 +151,36 @@ public class ApiEndpointsIntegrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ReportEndpoint_RejectsMachineNameWithLineBreaks_Returns400BadRequest()
+    {
+        // Arrange
+        var request = new AgentReportRequest
+        {
+            MachineName = "TestMachine\r\nForgedEntry",
+            Rows = new List<RawDriveRowRequest>
+            {
+                new()
+                {
+                    DriveLetter = "C:",
+                    TotalSpaceGb = 500,
+                    UsedSpaceGb = 250,
+                    FreeSpaceGb = 250,
+                    PercentFree = 50,
+                    Timestamp = DateTime.UtcNow
+                }
+            }
+        };
+
+        // Act
+        var response = await _client!.PostAsJsonAsync("/api/agent/report", request);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var responseContent = await response.Content.ReadAsStringAsync();
+        Assert.Contains("machineName contains invalid line break characters", responseContent);
+    }
+
+    [Fact]
     public async Task ReportEndpoint_RejectsNullRows_Returns400BadRequest()
     {
         // Arrange
