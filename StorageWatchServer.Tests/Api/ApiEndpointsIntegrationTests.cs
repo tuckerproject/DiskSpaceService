@@ -150,13 +150,17 @@ public class ApiEndpointsIntegrationTests : IAsyncLifetime
         Assert.Contains("machineName is required", responseContent);
     }
 
-    [Fact]
-    public async Task ReportEndpoint_RejectsMachineNameWithLineBreaks_Returns400BadRequest()
+    [Theory]
+    [InlineData("TestMachine\r\nForgedEntry")]
+    [InlineData("TestMachine\u0085ForgedEntry")]
+    [InlineData("TestMachine\u2028ForgedEntry")]
+    [InlineData("TestMachine\u2029ForgedEntry")]
+    public async Task ReportEndpoint_RejectsMachineNameWithLineBreaks_Returns400BadRequest(string machineName)
     {
         // Arrange
         var request = new AgentReportRequest
         {
-            MachineName = "TestMachine\r\nForgedEntry",
+            MachineName = machineName,
             Rows = new List<RawDriveRowRequest>
             {
                 new()
