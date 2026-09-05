@@ -21,7 +21,7 @@ param(
     [string]$ProjectPath = (Join-Path $RepoRoot 'StorageWatchUI\StorageWatchUI.csproj'),
 
     [Parameter()]
-    [string]$Framework = 'net8.0-windows7.0',
+    [string]$Framework = '',
 
     [Parameter()]
     [string]$RuntimeIdentifier = '',
@@ -124,11 +124,14 @@ $publishArgs = @(
     'publish',
     $resolvedProjectPath,
     '--configuration', $Configuration,
-    '--framework', $Framework,
     '--output', $resolvedPublishDir,
     "/p:Version=$Version",
     "/p:InformationalVersion=$Version"
 )
+
+if (-not [string]::IsNullOrWhiteSpace($Framework)) {
+    $publishArgs += @('--framework', $Framework)
+}
 
 if (-not [string]::IsNullOrWhiteSpace($RuntimeIdentifier)) {
     $publishArgs += @('--runtime', $RuntimeIdentifier)
